@@ -1,0 +1,36 @@
+-- Coze 内置 PostgreSQL 建表（可选；无库时系统使用内存态仍可演示）
+
+CREATE TABLE IF NOT EXISTS policy_history (
+  id BIGSERIAL PRIMARY KEY,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  found BOOL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS audit_records (
+  id BIGSERIAL PRIMARY KEY,
+  person_name VARCHAR(100) NOT NULL,
+  person_code VARCHAR(50) NOT NULL,
+  summary TEXT,
+  issue_count INT4 DEFAULT 0,
+  report JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS business_rules (
+  id BIGSERIAL PRIMARY KEY,
+  rule_key VARCHAR(50) UNIQUE NOT NULL,
+  content TEXT NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS policy_documents (
+  id BIGSERIAL PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  source_file VARCHAR(255),
+  content TEXT NOT NULL,
+  meta JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);

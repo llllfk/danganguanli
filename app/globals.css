@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+:root {
+  --hr-bg: #eaf1f8;
+  --hr-primary: #4a9eff;
+  --hr-primary-dark: #2f6fc0;
+  --hr-ink: #1f2d42;
+  --hr-muted: #7b8da0;
+  --hr-line: #e4ebf3;
+  --hr-side: #1a4b7a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--hr-bg);
+  color: var(--hr-ink);
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes floatY {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.anim-fade-up {
+  animation: fadeUp 0.55s ease both;
+}
+
+.anim-pulse-soft {
+  animation: pulseSoft 2.4s ease-in-out infinite;
+}
+
+.anim-float {
+  animation: floatY 3.2s ease-in-out infinite;
+}
+
+.hr-gradient-text {
+  background: linear-gradient(90deg, #8b5cf6 0%, #466ff4 55%, #2f9bff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hr-header-ribbon {
+  background: linear-gradient(90deg, transparent 0%, #4a9eff 18%, #2b7fe0 100%);
+}
