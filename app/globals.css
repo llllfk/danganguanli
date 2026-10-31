@@ -8,6 +8,10 @@
   --hr-muted: #7b8da0;
   --hr-line: #e4ebf3;
   --hr-side: #1a4b7a;
+  /* 登录页：不用 Google Fonts（Coze 构建环境拉不到） */
+  --font-login-display: "PingFang SC", "Microsoft YaHei", "Noto Serif SC",
+    "Songti SC", serif;
+  --font-login-body: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
 }
 
 * {

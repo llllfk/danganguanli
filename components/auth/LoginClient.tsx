@@ -52,7 +52,10 @@ export function LoginClient() {
         <div className="login-orb login-orb-b" aria-hidden />
 
         <div className="relative z-10 flex-1 flex items-center">
-          <h1 className="login-fade-1 font-[family-name:var(--font-login-display)] text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold tracking-wide">
+          <h1
+            className="login-fade-1 text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold tracking-wide"
+            style={{ fontFamily: "var(--font-login-display)" }}
+          >
             <span className="block whitespace-nowrap text-[#7dd3fc]">干部人事档案</span>
             <span className="mt-5 md:mt-7 block whitespace-nowrap text-white">智能辅助系统</span>
           </h1>
@@ -67,7 +70,10 @@ export function LoginClient() {
         <div className="login-right-glow" aria-hidden />
         <div className="login-fade-2 relative w-full max-w-[420px]">
           <div className="mb-8">
-            <h2 className="font-[family-name:var(--font-login-display)] text-3xl text-[#0f2744]">
+            <h2
+              className="text-3xl text-[#0f2744]"
+              style={{ fontFamily: "var(--font-login-display)" }}
+            >
               欢迎回来
             </h2>
           </div>
