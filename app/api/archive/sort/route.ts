@@ -1,16 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sortPieces } from "@/lib/archive-engine";
-import type { ArchivePiece } from "@/types";
+import { getSortedGroups, sortPersonPieces } from "@/lib/repos/archive";
+
+export async function GET(request: NextRequest) {
+  try {
+    const personCode =
+      request.nextUrl.searchParams.get("personCode") || "00001";
+    const data = await getSortedGroups(personCode);
+    return NextResponse.json({ data });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "读取排序失败" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as { pieces?: ArchivePiece[] };
-    if (!body.pieces?.length) {
-      return NextResponse.json({ error: "请先完成分类核定" }, { status: 400 });
-    }
-    const sorted = sortPieces(body.pieces);
-    return NextResponse.json({ data: sorted });
-  } catch {
-    return NextResponse.json({ error: "排序失败" }, { status: 500 });
+    const body = (await request.json().catch(() => ({}))) as {
+      personCode?: string;
+    };
+    const data = await sortPersonPieces(body.personCode || "00001");
+    return NextResponse.json({ data });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "排序失败" },
+      { status: 500 }
+    );
   }
 }

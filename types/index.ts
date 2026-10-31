@@ -1,3 +1,24 @@
+export type UserRole = "admin" | "user";
+
+export interface AuthUser {
+  id: string;
+  /** 登录手机号（库字段 username） */
+  phone: string;
+  displayName: string;
+  role: UserRole;
+}
+
+export interface SysUser {
+  id: string;
+  /** 登录手机号 */
+  phone: string;
+  displayName: string;
+  role: UserRole;
+  status: "active" | "disabled";
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** 档案十大类（含4/9小类） */
 export type ArchiveCategoryCode =
   | "0100"
@@ -33,6 +54,7 @@ export interface PolicyDoc {
 export interface PolicyAskResult {
   answer: string;
   sources: Array<{
+    id?: string;
     title: string;
     excerpt: string;
     sourceFile: string;
@@ -40,12 +62,31 @@ export interface PolicyAskResult {
   found: boolean;
 }
 
+export interface PolicySourceRef {
+  id?: string;
+  title: string;
+  excerpt: string;
+  sourceFile: string;
+}
+
 export interface PolicyHistoryItem {
   id: string;
+  conversationId: string;
   question: string;
   answer: string;
   found: boolean;
+  thinkingMs?: number;
+  provider?: string;
+  sources?: PolicySourceRef[];
   createdAt: string;
+}
+
+export interface PolicyConversation {
+  conversationId: string;
+  title: string;
+  messageCount: number;
+  lastAt: string;
+  found?: boolean;
 }
 
 export interface ArchivePiece {

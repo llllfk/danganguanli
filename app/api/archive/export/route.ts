@@ -1,42 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import type { SortItem } from "@/types";
+import { getSortedGroups, sortPersonPieces } from "@/lib/repos/archive";
+import { buildCatalogWorkbook } from "@/lib/repos/catalog-export";
+import { query } from "@/lib/db";
 
+/** 导出制式目录（对齐附件2：类标题 + 序号 + 年/月/日 + 页数） */
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as {
-      sorted?: SortItem[];
-      personName?: string;
+    const body = (await request.json().catch(() => ({}))) as {
       personCode?: string;
+      personName?: string;
     };
-    const sorted = body.sorted || [];
+    const personCode = body.personCode || "00001";
+    let sorted = await getSortedGroups(personCode);
+    if (!sorted.length) {
+      sorted = await sortPersonPieces(personCode);
+    }
     if (!sorted.length) {
       return NextResponse.json({ error: "暂无排序结果可导出" }, { status: 400 });
     }
 
-    const rows: Array<Record<string, string | number>> = [];
-    for (const group of sorted) {
-      for (const item of group.items) {
-        rows.push({
-          类别: group.categoryName,
-          分类号: group.category,
-          正式编号: item.formalNo,
-          材料名称: item.materialName,
-          形成日期: item.formDate,
-          页数: item.pageCount,
-          原流水号: item.serialNo,
-        });
-      }
+    let personName = body.personName;
+    if (!personName) {
+      const p = await query<{ person_name: string }>(
+        `SELECT person_name FROM persons WHERE person_code = $1`,
+        [personCode]
+      );
+      personName = p.rows[0]?.person_name || personCode;
     }
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, "档案目录");
+    const wb = buildCatalogWorkbook(personName, sorted);
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
     const bytes = new Uint8Array(buf);
-
     const filename = encodeURIComponent(
-      `人事档案目录_${body.personName || "人员"}_${body.personCode || "00001"}.xlsx`
+      `人事档案目录_${personName}_${personCode}.xlsx`
     );
 
     return new NextResponse(bytes, {
@@ -47,7 +44,10 @@ export async function POST(request: NextRequest) {
         "Content-Disposition": `attachment; filename*=UTF-8''${filename}`,
       },
     });
-  } catch {
-    return NextResponse.json({ error: "导出失败" }, { status: 500 });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "导出失败" },
+      { status: 500 }
+    );
   }
 }

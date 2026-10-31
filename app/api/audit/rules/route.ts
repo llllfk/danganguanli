@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRules, updateRules } from "@/lib/store";
 
 export async function GET() {
-  const rules = getRules();
+  const rules = await getRules();
   return NextResponse.json({
     data: {
       audit: rules.audit,
@@ -17,7 +17,7 @@ export async function PUT(request: NextRequest) {
       audit?: string;
       completeness?: string;
     };
-    const next = updateRules({
+    const next = await updateRules({
       ...(body.audit !== undefined ? { audit: body.audit } : {}),
       ...(body.completeness !== undefined
         ? { completeness: body.completeness }

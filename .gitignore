@@ -5,3 +5,10 @@ out
 .env*.local
 *.log
 .DS_Store
+public/archive
+data/uploads
+data/tmp-kb
+*.tsbuildinfo
+scripts/_tmp*
+scripts/coze-kb-result.json
+

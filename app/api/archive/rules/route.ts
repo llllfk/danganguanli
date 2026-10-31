@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRules, updateRules } from "@/lib/store";
 
 export async function GET() {
-  const rules = getRules();
+  const rules = await getRules();
   return NextResponse.json({
     data: {
       classify: rules.classify,
@@ -17,7 +17,7 @@ export async function PUT(request: NextRequest) {
       classify?: string;
       sort?: string;
     };
-    const next = updateRules({
+    const next = await updateRules({
       ...(body.classify !== undefined ? { classify: body.classify } : {}),
       ...(body.sort !== undefined ? { sort: body.sort } : {}),
     });

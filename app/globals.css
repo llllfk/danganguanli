@@ -58,6 +58,68 @@ body {
   animation: fadeUp 0.55s ease both;
 }
 
+.anim-stagger > *:nth-child(1) {
+  animation: fadeUp 0.5s ease both;
+  animation-delay: 0.05s;
+}
+.anim-stagger > *:nth-child(2) {
+  animation: fadeUp 0.5s ease both;
+  animation-delay: 0.12s;
+}
+.anim-stagger > *:nth-child(3) {
+  animation: fadeUp 0.5s ease both;
+  animation-delay: 0.19s;
+}
+.anim-stagger > *:nth-child(4) {
+  animation: fadeUp 0.5s ease both;
+  animation-delay: 0.26s;
+}
+.anim-stagger > *:nth-child(5) {
+  animation: fadeUp 0.5s ease both;
+  animation-delay: 0.33s;
+}
+.anim-stagger > *:nth-child(6) {
+  animation: fadeUp 0.5s ease both;
+  animation-delay: 0.4s;
+}
+
+@keyframes countPop {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.anim-count-pop {
+  animation: countPop 0.45s ease both;
+}
+
+.anim-stagger > * {
+  animation: fadeUp 0.5s ease both;
+}
+.anim-stagger > *:nth-child(1) {
+  animation-delay: 0.05s;
+}
+.anim-stagger > *:nth-child(2) {
+  animation-delay: 0.12s;
+}
+.anim-stagger > *:nth-child(3) {
+  animation-delay: 0.19s;
+}
+.anim-stagger > *:nth-child(4) {
+  animation-delay: 0.26s;
+}
+.anim-stagger > *:nth-child(5) {
+  animation-delay: 0.33s;
+}
+.anim-stagger > *:nth-child(6) {
+  animation-delay: 0.4s;
+}
+
 .anim-pulse-soft {
   animation: pulseSoft 2.4s ease-in-out infinite;
 }
@@ -75,4 +137,210 @@ body {
 
 .hr-header-ribbon {
   background: linear-gradient(90deg, transparent 0%, #4a9eff 18%, #2b7fe0 100%);
+}
+
+/* ===== 登录页动效 ===== */
+.login-hero {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(14, 165, 233, 0.28), transparent 55%),
+    radial-gradient(900px 500px at 90% 110%, rgba(56, 189, 248, 0.18), transparent 50%),
+    linear-gradient(160deg, #071526 0%, #0b2a4a 48%, #0a3a5c 100%);
+}
+
+.login-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(148, 197, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 197, 255, 0.07) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.75), transparent 92%);
+}
+
+.login-scan {
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  height: 140px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(125, 211, 252, 0.18),
+    transparent
+  );
+  animation: loginScan 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.login-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(40px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.login-orb-a {
+  width: 280px;
+  height: 280px;
+  background: #0ea5e9;
+  top: 12%;
+  right: -40px;
+  animation: floatY 7s ease-in-out infinite;
+}
+.login-orb-b {
+  width: 220px;
+  height: 220px;
+  background: #0369a1;
+  bottom: 8%;
+  left: -50px;
+  animation: floatY 8.5s ease-in-out infinite reverse;
+}
+
+.login-right-glow {
+  position: absolute;
+  width: 420px;
+  height: 420px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.16), transparent 70%);
+  top: 18%;
+  right: 8%;
+  pointer-events: none;
+}
+
+.login-card {
+  transition: transform 0.35s ease, border-color 0.35s ease, background 0.35s ease;
+}
+.login-card:hover {
+  transform: translateX(6px);
+  border-color: rgba(125, 211, 252, 0.45);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.login-submit::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.22) 48%,
+    transparent 62%
+  );
+  transform: translateX(-120%);
+  animation: loginShine 3.2s ease-in-out infinite;
+}
+
+.login-fade-1 {
+  animation: fadeUp 0.7s ease both;
+}
+.login-fade-2 {
+  animation: fadeUp 0.85s ease both 0.12s;
+}
+.login-fade-3 {
+  animation: fadeUp 1s ease both 0.22s;
+}
+.login-fade-4 {
+  animation: fadeUp 1.05s ease both 0.32s;
+}
+
+@keyframes loginScan {
+  0% {
+    top: -10%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    top: 110%;
+    opacity: 0;
+  }
+}
+
+@keyframes loginShine {
+  0%,
+  55% {
+    transform: translateX(-120%);
+  }
+  80%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-scan,
+  .login-orb,
+  .login-submit::after,
+  .login-fade-1,
+  .login-fade-2,
+  .login-fade-3,
+  .login-fade-4 {
+    animation: none !important;
+  }
+}
+
+/* ===== 自定义表单控件（弱化原生观感） ===== */
+.shadow-card {
+  box-shadow: 0 10px 30px -18px rgba(26, 75, 122, 0.35);
+}
+
+.ui-field-shell {
+  border: 1px solid #cfe0f5;
+  background: linear-gradient(180deg, #f8fbfe 0%, #ffffff 100%);
+  border-radius: 0.85rem;
+  padding: 0.7rem 0.95rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.ui-field-shell:focus-within,
+.ui-field-shell-open {
+  border-color: #4a9eff;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(74, 158, 255, 0.14);
+}
+
+.ui-field {
+  width: 100%;
+  border: 0 !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font: inherit;
+  color: #1f2d42;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.ui-field::placeholder {
+  color: #94a3b8;
+}
+
+.ui-field-static {
+  display: block;
+  width: 100%;
+  color: #1f2d42;
+  line-height: 1.4;
+}
+
+.ui-textarea {
+  min-height: 96px;
+  resize: vertical;
+  padding: 0.85rem 0.95rem !important;
+  line-height: 1.65;
+}
+
+.ui-field[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.ui-field[type="password"]::-ms-reveal,
+.ui-field[type="password"]::-ms-clear {
+  display: none;
 }

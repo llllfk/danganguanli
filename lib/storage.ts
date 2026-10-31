@@ -1,22 +1,143 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import fs from "fs/promises";
+import path from "path";
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
-export const s3Client = new S3Client({
-  endpoint: process.env.COZE_STORAGE_URL,
-  region: "us-east-1",
-  credentials: {
+/** 扣子编程会自动注入：COZE_STORAGE_URL / AK / SK / BUCKET */
+/** 本地未配置时，上传落到 data/uploads，file_path 记绝对路径 */
+
+function storageEnv() {
+  return {
+    endpoint: process.env.COZE_STORAGE_URL || "",
     accessKeyId: process.env.COZE_STORAGE_AK || "",
     secretAccessKey: process.env.COZE_STORAGE_SK || "",
-  },
-  forcePathStyle: true,
-});
+    bucket: process.env.COZE_STORAGE_BUCKET || "",
+  };
+}
 
-export const BUCKET_NAME = process.env.COZE_STORAGE_BUCKET || "";
+let _client: S3Client | null = null;
 
 export function hasStorage() {
-  return Boolean(
-    process.env.COZE_STORAGE_URL &&
-      process.env.COZE_STORAGE_AK &&
-      process.env.COZE_STORAGE_SK &&
-      process.env.COZE_STORAGE_BUCKET
-  );
+  const e = storageEnv();
+  return Boolean(e.endpoint && e.accessKeyId && e.secretAccessKey && e.bucket);
+}
+
+/** 本地上传根目录（相对项目） */
+export function localUploadRoot() {
+  return path.join(process.cwd(), "data", "uploads");
+}
+
+export function getBucket() {
+  return storageEnv().bucket;
+}
+
+export function getS3Client() {
+  if (!hasStorage()) {
+    throw new Error(
+      "未配置对象存储（需 COZE_STORAGE_URL / COZE_STORAGE_AK / COZE_STORAGE_SK / COZE_STORAGE_BUCKET）"
+    );
+  }
+  if (!_client) {
+    const e = storageEnv();
+    _client = new S3Client({
+      endpoint: e.endpoint,
+      region: process.env.COZE_STORAGE_REGION || "us-east-1",
+      credentials: {
+        accessKeyId: e.accessKeyId,
+        secretAccessKey: e.secretAccessKey,
+      },
+      forcePathStyle: true,
+    });
+  }
+  return _client;
+}
+
+/** 库内 file_path 约定：s3://{bucket}/{key}；本地为绝对路径 */
+export function toS3Path(key: string) {
+  return `s3://${getBucket()}/${key.replace(/^\/+/, "")}`;
+}
+
+export function parseS3Path(filePath: string): { bucket: string; key: string } | null {
+  const m = String(filePath || "").match(/^s3:\/\/([^/]+)\/(.+)$/);
+  if (!m) return null;
+  return { bucket: m[1], key: m[2] };
+}
+
+export function isS3Path(filePath: string | null | undefined) {
+  return !!parseS3Path(filePath || "");
+}
+
+export async function putObject(params: {
+  key: string;
+  body: Buffer | Uint8Array;
+  contentType?: string;
+}) {
+  const key = params.key.replace(/^\/+/, "").replace(/\\/g, "/");
+
+  if (hasStorage()) {
+    const client = getS3Client();
+    const bucket = getBucket();
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: params.body,
+        ContentType: params.contentType || "application/octet-stream",
+      })
+    );
+    return toS3Path(key);
+  }
+
+  // 本地开发：写磁盘，返回绝对路径供 page-image 读取
+  const abs = path.join(localUploadRoot(), ...key.split("/"));
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, params.body);
+  return abs;
+}
+
+export async function getObjectBytes(filePathOrKey: string): Promise<Buffer> {
+  const parsed = parseS3Path(filePathOrKey);
+  if (parsed) {
+    if (!hasStorage()) {
+      throw new Error("文件在对象存储中，但当前环境未注入存储凭证");
+    }
+    const client = getS3Client();
+    const res = await client.send(
+      new GetObjectCommand({
+        Bucket: parsed.bucket,
+        Key: parsed.key,
+      })
+    );
+    const stream = res.Body;
+    if (!stream) throw new Error("对象为空");
+    const bytes = await stream.transformToByteArray();
+    return Buffer.from(bytes);
+  }
+
+  // 本地绝对路径或相对 data/uploads 的 key
+  const abs = path.isAbsolute(filePathOrKey)
+    ? filePathOrKey
+    : path.join(localUploadRoot(), filePathOrKey.replace(/^\/+/, ""));
+  return fs.readFile(abs);
+}
+
+/** 档案页对象键 */
+export function archiveObjectKey(
+  personCode: string,
+  serialNo: string,
+  fileName: string
+) {
+  return `archive/${personCode}/${serialNo}/${fileName}`.replace(/\\/g, "/");
+}
+
+/** 审核有序件对象键（扣子 S3 自动注入凭证时写入同一桶） */
+export function auditObjectKey(
+  personCode: string,
+  formalNo: string,
+  fileName: string
+) {
+  return `audit/${personCode}/${formalNo}/${fileName}`.replace(/\\/g, "/");
 }

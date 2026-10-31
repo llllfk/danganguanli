@@ -1,25 +1,44 @@
-import { NextRequest, NextResponse } from "next/server";
-import { buildDemoPieces, enrichPiece } from "@/lib/archive-engine";
-import type { ArchivePiece } from "@/types";
+import { NextRequest } from "next/server";
+import { classifyPersonPiecesProgressive } from "@/lib/repos/archive";
+
+export const maxDuration = 300;
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = (await request.json().catch(() => ({}))) as {
-      pieces?: Array<{ serialNo: string; personCode: string; pages?: string[] }>;
-      useDemo?: boolean;
-    };
+  const body = (await request.json().catch(() => ({}))) as {
+    personCode?: string;
+    skipVision?: boolean;
+  };
+  const personCode = body.personCode || "00001";
+  const encoder = new TextEncoder();
 
-    let pieces: ArchivePiece[];
-    if (body.useDemo || !body.pieces?.length) {
-      pieces = buildDemoPieces("00001");
-    } else {
-      pieces = body.pieces.map((p) =>
-        enrichPiece(p.serialNo, p.personCode, p.pages || [])
-      );
-    }
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => {
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      };
+      try {
+        await classifyPersonPiecesProgressive(personCode, {
+          skipVision: body.skipVision,
+          onEvent: send,
+        });
+      } catch (e) {
+        send({
+          type: "error",
+          error: e instanceof Error ? e.message : "分类失败",
+        });
+      } finally {
+        controller.close();
+      }
+    },
+  });
 
-    return NextResponse.json({ data: pieces });
-  } catch {
-    return NextResponse.json({ error: "分类失败" }, { status: 500 });
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
 }

@@ -1,0 +1,16 @@
+[
+  {"fieldKey":"name","fieldLabel":"姓名","materialName":"干部履历表","formYear":"2017","materialNo":"00001-0100-001-001","value":"张三","formDate":"2017-03-12","isBaseline":true},
+  {"fieldKey":"name","fieldLabel":"姓名","materialName":"入党志愿书","formYear":"2002","materialNo":"00001-0600-002-001","value":"张三","formDate":"2002-03-15","isBaseline":false},
+  {"fieldKey":"birth","fieldLabel":"出生时间","materialName":"入团志愿书","formYear":"1996","materialNo":"00001-0600-001-001","value":"1982-05-12","formDate":"1996-05-04","isBaseline":true},
+  {"fieldKey":"birth","fieldLabel":"出生时间","materialName":"中学生社会实践活动表","formYear":"1999","materialNo":"00001-0401-000-002","value":"1982-08-05","formDate":"1999-08-05","isBaseline":false},
+  {"fieldKey":"birth","fieldLabel":"出生时间","materialName":"干部履历表","formYear":"2017","materialNo":"00001-0100-001-003","value":"1982-05-12","formDate":"2017-03-12","isBaseline":false},
+  {"fieldKey":"work","fieldLabel":"参加工作时间","materialName":"辽宁省就业人员登记表","formYear":"2010","materialNo":"00001-0902-002-001","value":"2004-07-15","formDate":"2010-07-05","isBaseline":true},
+  {"fieldKey":"work","fieldLabel":"参加工作时间","materialName":"干部任免审批表（专项）","formYear":"2016","materialNo":"00001-0500-001-002","value":"2004-07-15","formDate":"2016-08-20","isBaseline":false},
+  {"fieldKey":"party","fieldLabel":"入党时间","materialName":"入党志愿书","formYear":"2002","materialNo":"00001-0600-002-004","value":"2002-03-15","formDate":"2002-03-15","isBaseline":true},
+  {"fieldKey":"party","fieldLabel":"入党时间","materialName":"干部履历表","formYear":"2017","materialNo":"00001-0100-001-005","value":"2002-03-15","formDate":"2017-03-12","isBaseline":false},
+  {"fieldKey":"education","fieldLabel":"学历","materialName":"毕业生登记表（本科）","formYear":"2004","materialNo":"00001-0401-001-001","value":"大学本科","formDate":"2004-06-30","isBaseline":true},
+  {"fieldKey":"education","fieldLabel":"学历","materialName":"干部履历表","formYear":"2017","materialNo":"00001-0100-001-006","value":"大学本科","formDate":"2017-03-12","isBaseline":false},
+  {"fieldKey":"degree","fieldLabel":"学位","materialName":"学位授予审批表","formYear":"2004","materialNo":"00001-0401-004-001","value":"学士","formDate":"2004-06-28","isBaseline":true},
+  {"fieldKey":"experience","fieldLabel":"工作经历","materialName":"干部任免审批表（专项）","formYear":"2016","materialNo":"00001-0500-001-003","value":"2004.07-2010.06 某公司科员；2010.07至今 本单位","formDate":"2016-08-20","isBaseline":true},
+  {"fieldKey":"recognition","fieldLabel":"组织认定","materialName":"干部基本信息审核认定表","formYear":"2016","materialNo":"00001-0500-002-001","value":"已认定","formDate":"2016-08-20","isBaseline":true}
+]

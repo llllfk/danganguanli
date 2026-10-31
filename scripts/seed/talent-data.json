@@ -1,0 +1,403 @@
+{
+  "persons": [
+    { "code": "00001", "name": "张三" },
+    { "code": "00002", "name": "李四" },
+    { "code": "00003", "name": "王五" },
+    { "code": "20631", "name": "王宇轩" },
+    { "code": "20612", "name": "李淑芬" },
+    { "code": "20587", "name": "张建国" },
+    { "code": "20595", "name": "刘德海" },
+    { "code": "20603", "name": "陈志远" },
+    { "code": "20621", "name": "赵文博" }
+  ],
+  "summaryStats": [
+    { "title": "岗位总数", "value": "74", "tip": "组织手册", "sort": 1 },
+    { "title": "在岗人员", "value": "376", "tip": "人事档案", "sort": 2 },
+    { "title": "部门单位", "value": "15", "tip": "组织手册", "sort": 3 },
+    { "title": "临期节点", "value": "6", "tip": "90日内", "sort": 4 }
+  ],
+  "charts": {
+    "age": [
+      { "label": "56岁以上", "value": 43, "color": "#A878D0" },
+      { "label": "46-55岁", "value": 66, "color": "#F0A04B" },
+      { "label": "36-45岁", "value": 178, "color": "#4A9FD9" },
+      { "label": "35岁以下", "value": 89, "color": "#3DB883" }
+    ],
+    "rank": [
+      { "label": "正高级", "value": 66, "extra": 0 },
+      { "label": "副高级", "value": 145, "extra": 81 },
+      { "label": "中级", "value": 109, "extra": 64 },
+      { "label": "初级", "value": 25, "extra": 20 },
+      { "label": "无职称", "value": 31, "extra": 0 }
+    ],
+    "edu": [
+      { "label": "本科", "value": 200, "pct": "53.2%", "color": "#4A9FD9" },
+      { "label": "研究生", "value": 127, "pct": "33.8%", "color": "#3DB883" },
+      { "label": "大专", "value": 26, "pct": "6.9%", "color": "#F0A04B" },
+      { "label": "中专", "value": 14, "pct": "3.7%", "color": "#E8704B" },
+      { "label": "初中", "value": 6, "pct": "1.6%", "color": "#E85C60" },
+      { "label": "高中", "value": 3, "pct": "0.8%", "color": "#A878D0" }
+    ],
+    "major": [
+      { "label": "水利水电类", "value": 142 },
+      { "label": "水文水资源类", "value": 39 },
+      { "label": "地质勘查类", "value": 25 },
+      { "label": "建筑土木类", "value": 24 },
+      { "label": "电气动力类", "value": 24 },
+      { "label": "经济管理类", "value": 19 },
+      { "label": "测绘地理类", "value": 19 },
+      { "label": "环境生态类", "value": 18 },
+      { "label": "港航海岸类", "value": 16 },
+      { "label": "其他", "value": 14 },
+      { "label": "农业园林类", "value": 13 },
+      { "label": "机械材料类", "value": 11 },
+      { "label": "计算机信息类", "value": 7 },
+      { "label": "市政给排水", "value": 5 }
+    ]
+  },
+  "profiles": [
+    {
+      "personCode": "20631",
+      "displayName": "王宇轩",
+      "titleText": "20631 · 助理工程师",
+      "tags": ["理工背景", "党员", "初级职称"],
+      "sections": ["基本信息", "任职经历", "考核奖惩"],
+      "meta": {
+        "gender": "男",
+        "ethnicity": "汉族",
+        "dob": "2002-03-15",
+        "political": "中共党员",
+        "joinParty": "2023-06-20",
+        "workStart": "2024-07-01",
+        "education": "大学本科",
+        "degree": "工学学士",
+        "title": "助理工程师",
+        "position": "无",
+        "contractLevel": "二级合同制",
+        "archiveStatus": "已审核",
+        "timeline": [
+          {
+            "date": "2025-07",
+            "text": "至今 · XX公司 助理工程师",
+            "source": "来源：毕业生确定专业技术职务审核表（2025）"
+          },
+          {
+            "date": "2024-07",
+            "text": "至 2025-06 · XX公司 见习",
+            "source": "来源：干部履历表（2024）"
+          },
+          {
+            "date": "2020-09",
+            "text": "至 2024-06 · XX大学 本科（工学学士）",
+            "source": "来源：本科毕业生登记表（2024）"
+          },
+          {
+            "date": "2015-09",
+            "text": "至 2018-06 · XX中学 高中学习",
+            "source": "来源：中学生登记表（2016）"
+          },
+          {
+            "date": "2010-09",
+            "text": "至 2015-06 · 义务教育阶段",
+            "source": "来源：学生登记表（2010）"
+          }
+        ],
+        "promotion": [
+          { "date": "2025-07", "label": "助理工程师（初级）" },
+          { "date": "2029-07", "label": "中级（待晋升）", "pending": true }
+        ],
+        "assessments": [
+          { "year": "2026", "result": "-", "note": "年度考核材料未归档" },
+          { "year": "2025", "result": "优秀", "note": "年度考核" },
+          { "year": "2024", "result": "优秀", "note": "年度考核" }
+        ],
+        "trend": [
+          { "year": "2023", "level": "称职" },
+          { "year": "2024", "level": "优秀" },
+          { "year": "2025", "level": "优秀" },
+          { "year": "2026", "level": "待归档" }
+        ],
+        "awards": [
+          {
+            "year": "2025",
+            "title": "先进个人",
+            "source": "来源：2025年度XX公司先进个人审批表"
+          },
+          {
+            "year": "2024",
+            "title": "先进个人",
+            "source": "来源：2024年度XX公司先进个人审批表"
+          }
+        ]
+      }
+    },
+    {
+      "personCode": "00001",
+      "displayName": "张三",
+      "titleText": "00001 · 科员",
+      "tags": ["管理骨干", "理工背景", "党员", "中级职称"],
+      "sections": ["基本信息", "任职经历", "考核奖惩"],
+      "meta": {
+        "gender": "男",
+        "ethnicity": "汉族",
+        "dob": "1985-06-18",
+        "political": "中共党员",
+        "joinParty": "2008-07-01",
+        "workStart": "2007-07-01",
+        "education": "大学本科",
+        "degree": "工学学士",
+        "title": "工程师",
+        "position": "科员",
+        "contractLevel": "一级合同制",
+        "archiveStatus": "已审核",
+        "timeline": [
+          {
+            "date": "2015-03",
+            "text": "至今 · 综合管理岗 科员",
+            "source": "来源：干部任免审批表"
+          },
+          {
+            "date": "2007-07",
+            "text": "至 2015-02 · 专业技术岗",
+            "source": "来源：干部履历表"
+          }
+        ],
+        "promotion": [
+          { "date": "2012-07", "label": "助理工程师" },
+          { "date": "2016-07", "label": "工程师（中级）" }
+        ],
+        "assessments": [
+          { "year": "2025", "result": "优秀", "note": "年度考核" },
+          { "year": "2024", "result": "称职", "note": "年度考核" },
+          { "year": "2023", "result": "优秀", "note": "年度考核" }
+        ],
+        "trend": [
+          { "year": "2022", "level": "称职" },
+          { "year": "2023", "level": "优秀" },
+          { "year": "2024", "level": "称职" },
+          { "year": "2025", "level": "优秀" }
+        ],
+        "awards": [
+          {
+            "year": "2025",
+            "title": "先进工作者",
+            "source": "来源：表彰决定"
+          }
+        ]
+      }
+    }
+  ],
+  "departments": [
+    {
+      "name": "党群部",
+      "sort": 1,
+      "expanded": true,
+      "posts": [
+        {
+          "name": "党群部部长",
+          "req": "本科及以上 · 管理/思政类 · 中级及以上 · 5年"
+        },
+        { "name": "党建管理岗", "req": "本科及以上 · 中共党员 · 2年" },
+        { "name": "工会管理岗", "req": "本科及以上 · 2年" },
+        { "name": "文化宣传岗", "req": "本科及以上 · 2年" }
+      ]
+    },
+    {
+      "name": "生产部门",
+      "sort": 2,
+      "expanded": true,
+      "posts": [
+        {
+          "name": "生产部门院长",
+          "req": "本科及以上 · 水利类 · 中级及以上 · 5年"
+        },
+        {
+          "name": "生产部门副院长",
+          "req": "本科及以上 · 水利类 · 中级及以上 · 5年"
+        },
+        {
+          "name": "生产部门总工程师",
+          "req": "本科及以上 · 水利类 · 高级及以上 · 8年"
+        },
+        {
+          "name": "专业技术岗",
+          "req": "本科及以上 · 水利类 · 初级及以上 · 3年"
+        }
+      ]
+    },
+    { "name": "综合办公室", "sort": 3, "posts": [] },
+    { "name": "人力资源部", "sort": 4, "posts": [] },
+    { "name": "财务部", "sort": 5, "posts": [] },
+    { "name": "法务部", "sort": 6, "posts": [] },
+    { "name": "总工程师办公室", "sort": 7, "posts": [] },
+    { "name": "纪检部", "sort": 8, "posts": [] },
+    { "name": "勘察分院", "sort": 9, "posts": [] },
+    { "name": "测绘分院", "sort": 10, "posts": [] },
+    { "name": "数字信息部", "sort": 11, "posts": [] }
+  ],
+  "matchScores": [
+    {
+      "personCode": "20631",
+      "post": "专业技术岗",
+      "score": 75,
+      "reason": "学历专业匹配，工作年限不足",
+      "sort": 1
+    },
+    {
+      "personCode": "00001",
+      "post": "综合管理岗",
+      "score": 92,
+      "reason": "履历完整 · 考核优秀",
+      "sort": 1
+    },
+    {
+      "personCode": "00001",
+      "post": "专业技术岗",
+      "score": 84,
+      "reason": "职称匹配 · 培训充分",
+      "sort": 2
+    }
+  ],
+  "verifyRows": [
+    {
+      "personCode": "20631",
+      "postName": "专业技术岗",
+      "deptName": "生产部门",
+      "item": "学历",
+      "require": "本科及以上",
+      "record": "大学本科（工学学士）",
+      "ok": true,
+      "sort": 1
+    },
+    {
+      "personCode": "20631",
+      "postName": "专业技术岗",
+      "deptName": "生产部门",
+      "item": "专业",
+      "require": "水利水电工程及相关",
+      "record": "水利水电工程",
+      "ok": true,
+      "sort": 2
+    },
+    {
+      "personCode": "20631",
+      "postName": "专业技术岗",
+      "deptName": "生产部门",
+      "item": "职称",
+      "require": "初级及以上",
+      "record": "助理工程师（初级）",
+      "ok": true,
+      "sort": 3
+    },
+    {
+      "personCode": "20631",
+      "postName": "专业技术岗",
+      "deptName": "生产部门",
+      "item": "工作年限",
+      "require": "3 年及以上",
+      "record": "2 年（2024-07 起）",
+      "ok": false,
+      "sort": 4
+    }
+  ],
+  "reminders": [
+    {
+      "code": "20595",
+      "name": "刘德海",
+      "type": "retire",
+      "date": "2026-12-15",
+      "note": "退休时间",
+      "editable": false,
+      "sort": 1
+    },
+    {
+      "code": "20603",
+      "name": "陈志远",
+      "type": "contract",
+      "date": "2026-11-05",
+      "note": "合同到期",
+      "editable": false,
+      "sort": 2
+    },
+    {
+      "code": "20612",
+      "name": "李淑芬",
+      "type": "contract",
+      "date": "2026-11-15",
+      "note": "合同到期",
+      "editable": false,
+      "sort": 3
+    },
+    {
+      "code": "20587",
+      "name": "张建国",
+      "type": "contract",
+      "date": "2026-11-23",
+      "note": "合同到期",
+      "editable": false,
+      "sort": 4
+    },
+    {
+      "code": "20621",
+      "name": "赵文博",
+      "type": "probation",
+      "date": "2026-11-15",
+      "note": "试用期满",
+      "editable": false,
+      "sort": 5
+    },
+    {
+      "code": "00001",
+      "name": "张三",
+      "type": "retire",
+      "date": "2042-05-12",
+      "note": "退休时间",
+      "editable": true,
+      "sort": 6
+    },
+    {
+      "code": "00001",
+      "name": "张三",
+      "type": "contract",
+      "date": "2027-07-01",
+      "note": "合同到期时间",
+      "editable": true,
+      "sort": 7
+    },
+    {
+      "code": "00001",
+      "name": "张三",
+      "type": "probation",
+      "date": "2011-01-01",
+      "note": "试用期满时间",
+      "editable": true,
+      "sort": 8
+    }
+  ],
+  "titlePromo": [
+    {
+      "code": "20631",
+      "name": "王宇轩",
+      "meta": "本科 · 初级（2025-07 取得）",
+      "verdict": "预计 2029-07 起可申报中级",
+      "ok": false,
+      "sort": 1
+    },
+    {
+      "code": "20612",
+      "name": "李淑芬",
+      "meta": "硕士 · 初级（2023-09 取得）",
+      "verdict": "已满足中级基础条件",
+      "ok": true,
+      "sort": 2
+    },
+    {
+      "code": "20587",
+      "name": "张建国",
+      "meta": "本科 · 中级（2021-07 取得）",
+      "verdict": "已满足副高基础条件",
+      "ok": true,
+      "sort": 3
+    }
+  ]
+}
