@@ -1,44 +1,155 @@
 import { query } from "@/lib/db";
 import type { PolicyDoc } from "@/types";
 
-export async function listPolicyDocuments(): Promise<PolicyDoc[]> {
-  const r = await query<{
-    id: string;
-    title: string;
-    source_file: string;
-    content: string;
-  }>(
-    `SELECT id::text, title, source_file, content
-     FROM policy_documents
-     ORDER BY id`
-  );
-  return r.rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    sourceFile: row.source_file || "",
-    content: row.content,
-  }));
+type PolicyRow = {
+  id: string;
+  title: string;
+  source_file: string;
+  content: string;
+  meta: Record<string, unknown> | null;
+  updated_at?: string;
+};
+
+function asMeta(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  if (typeof raw === "object") return raw as Record<string, unknown>;
+  return {};
 }
 
-export async function getPolicyDocument(id: string): Promise<PolicyDoc | null> {
-  const r = await query<{
-    id: string;
-    title: string;
-    source_file: string;
-    content: string;
-  }>(
-    `SELECT id::text, title, source_file, content
-     FROM policy_documents WHERE id::text = $1 OR doc_key = $1`,
-    [id]
-  );
-  const row = r.rows[0];
-  if (!row) return null;
+function mapPolicyRow(row: PolicyRow): PolicyDoc {
+  const meta = asMeta(row.meta);
+  const cozeDocumentId = String(
+    meta.cozeDocumentId || meta.coze_document_id || ""
+  ).trim();
   return {
     id: row.id,
     title: row.title,
     sourceFile: row.source_file || "",
     content: row.content,
+    cozeDocumentId: cozeDocumentId || undefined,
+    updatedAt: row.updated_at,
   };
+}
+
+export async function listPolicyDocuments(): Promise<PolicyDoc[]> {
+  const r = await query<PolicyRow>(
+    `SELECT id::text, title, source_file, content, meta, updated_at::text
+     FROM policy_documents
+     ORDER BY
+       COALESCE(
+         NULLIF(substring(title from '^\\s*(\\d+)'), '')::int,
+         NULLIF(substring(source_file from '^\\s*(\\d+)'), '')::int,
+         2147483647
+       ),
+       title,
+       id`
+  );
+  return r.rows.map(mapPolicyRow);
+}
+
+export async function getPolicyDocument(id: string): Promise<PolicyDoc | null> {
+  const r = await query<PolicyRow>(
+    `SELECT id::text, title, source_file, content, meta, updated_at::text
+     FROM policy_documents WHERE id::text = $1 OR doc_key = $1`,
+    [id]
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return mapPolicyRow(row);
+}
+
+function makeDocKey(title: string) {
+  const base = (title || "policy")
+    .replace(/[^\w\u4e00-\u9fff-]+/g, "_")
+    .slice(0, 40);
+  return `${base}_${Date.now().toString(36)}`;
+}
+
+export async function createPolicyDocument(input: {
+  title: string;
+  content: string;
+  sourceFile?: string;
+  cozeDocumentId?: string;
+}): Promise<PolicyDoc> {
+  const title = (input.title || "").trim();
+  if (!title) throw new Error("标题不能为空");
+  const content = input.content ?? "";
+  const meta = input.cozeDocumentId
+    ? { cozeDocumentId: input.cozeDocumentId }
+    : {};
+  const r = await query<PolicyRow>(
+    `INSERT INTO policy_documents (doc_key, title, source_file, content, meta)
+     VALUES ($1,$2,$3,$4,$5::jsonb)
+     RETURNING id::text, title, source_file, content, meta, updated_at::text`,
+    [
+      makeDocKey(title),
+      title,
+      input.sourceFile || "",
+      content,
+      JSON.stringify(meta),
+    ]
+  );
+  return mapPolicyRow(r.rows[0]);
+}
+
+export async function updatePolicyDocument(
+  id: string,
+  patch: {
+    title?: string;
+    content?: string;
+    sourceFile?: string;
+    cozeDocumentId?: string | null;
+  }
+): Promise<PolicyDoc | null> {
+  const cur = await query<PolicyRow>(
+    `SELECT id::text, title, source_file, content, meta, updated_at::text
+     FROM policy_documents WHERE id::text = $1`,
+    [id]
+  );
+  const row = cur.rows[0];
+  if (!row) return null;
+
+  const meta = { ...asMeta(row.meta) };
+  if (patch.cozeDocumentId === null) {
+    delete meta.cozeDocumentId;
+    delete meta.coze_document_id;
+  } else if (patch.cozeDocumentId) {
+    meta.cozeDocumentId = patch.cozeDocumentId;
+  }
+
+  const title = patch.title !== undefined ? patch.title.trim() : row.title;
+  const content = patch.content !== undefined ? patch.content : row.content;
+  const sourceFile =
+    patch.sourceFile !== undefined ? patch.sourceFile : row.source_file;
+
+  if (!title) throw new Error("标题不能为空");
+
+  const r = await query<PolicyRow>(
+    `UPDATE policy_documents
+     SET title = $2,
+         source_file = $3,
+         content = $4,
+         meta = $5::jsonb,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id::text = $1
+     RETURNING id::text, title, source_file, content, meta, updated_at::text`,
+    [id, title, sourceFile || "", content, JSON.stringify(meta)]
+  );
+  return mapPolicyRow(r.rows[0]);
+}
+
+export async function deletePolicyDocument(id: string): Promise<boolean> {
+  const r = await query(`DELETE FROM policy_documents WHERE id::text = $1`, [
+    id,
+  ]);
+  return (r.rowCount || 0) > 0;
 }
 
 function normPolicyTitle(t: string) {

@@ -49,6 +49,9 @@ export interface PolicyDoc {
   title: string;
   content: string;
   sourceFile: string;
+  /** 扣子知识库 document_id，存在于 meta.cozeDocumentId */
+  cozeDocumentId?: string;
+  updatedAt?: string;
 }
 
 export interface PolicyAskResult {

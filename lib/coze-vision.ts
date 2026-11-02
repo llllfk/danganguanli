@@ -1,7 +1,15 @@
 /**
- * 扣子视觉：上传 JPG → 多模态对话 → 抽取材料名称 / 形成日期
+ * 扣子视觉：上传 JPG → 多模态对话 → 抽取材料题名 / 形成日期（末日期）
  * 需配置 COZE_VISION_BOT_ID（发布为 API 的视觉理解智能体）
  */
+
+import {
+  ARCHIVE_META_PROMPT,
+  parseArchiveMetaJson,
+  type VisionExtractResult,
+} from "@/lib/vision-meta";
+
+export type { VisionExtractResult };
 
 const API = process.env.COZE_API_BASE || "https://api.coze.cn";
 
@@ -28,21 +36,6 @@ export function isCozeVisionConfigured() {
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
-
-export type VisionExtractResult = {
-  materialName?: string;
-  formDate?: string;
-  summary?: string;
-  raw?: string;
-};
-
-const EXTRACT_PROMPT = `你是干部人事档案材料识别助手。请阅读图片（档案扫描件首页），只提取下列字段，严格输出一行 JSON，不要 Markdown，不要其它说明：
-{"materialName":"材料全称","formDate":"YYYY-MM-DD或空字符串","summary":"不超过30字的摘要"}
-
-规则：
-- materialName：页面标题/表格名称，如「干部履历表」「毕业生登记表」「干部任免审批表」等，不要流水号
-- formDate：落款日期、填表日期或材料形成日期；看不清则 ""
-- 禁止编造看不到的内容`;
 
 /** 上传本地字节到扣子，返回 file_id */
 export async function uploadCozeFile(
@@ -91,41 +84,11 @@ async function cozeFetch(path: string, init?: RequestInit) {
   return json;
 }
 
-function parseExtractJson(text: string): VisionExtractResult {
-  const raw = text.trim();
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) return { raw };
-  try {
-    const obj = JSON.parse(m[0]) as Record<string, unknown>;
-    const materialName = String(obj.materialName || obj.material_name || "")
-      .trim()
-      .replace(/\s+/g, "");
-    let formDate = String(obj.formDate || obj.form_date || "").trim();
-    // 归一化常见日期
-    const dm = formDate.match(/(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})/);
-    if (dm) {
-      formDate = `${dm[1]}-${dm[2].padStart(2, "0")}-${dm[3].padStart(2, "0")}`;
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(formDate)) {
-      formDate = "";
-    }
-    const summary = String(obj.summary || "")
-      .trim()
-      .slice(0, 80);
-    return {
-      materialName: materialName || undefined,
-      formDate: formDate || undefined,
-      summary: summary || undefined,
-      raw,
-    };
-  } catch {
-    return { raw };
-  }
-}
+type ImageInput = { bytes: Buffer; fileName?: string };
 
-/** 对单张 JPG 调用视觉 Bot，抽取材料元数据 */
-export async function extractMetaFromImage(
-  bytes: Buffer,
-  fileName = "page.jpg"
+/** 对多张 JPG 调用视觉 Bot，抽取材料元数据（题名 + 末日期） */
+export async function extractMetaFromImages(
+  images: ImageInput[]
 ): Promise<VisionExtractResult> {
   const botId = visionBotId();
   if (!botId) {
@@ -133,13 +96,22 @@ export async function extractMetaFromImage(
       "未配置 COZE_VISION_BOT_ID：请在扣子创建「视觉理解」智能体并发布为 API"
     );
   }
+  if (!images.length) return {};
 
-  const fileId = await uploadCozeFile(bytes, fileName);
-  const content = JSON.stringify([
-    { type: "text", text: EXTRACT_PROMPT },
-    { type: "image", file_id: fileId },
-  ]);
+  const parts: Array<
+    { type: "text"; text: string } | { type: "image"; file_id: string }
+  > = [{ type: "text", text: ARCHIVE_META_PROMPT }];
 
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const fileId = await uploadCozeFile(
+      img.bytes,
+      img.fileName || `page-${i + 1}.jpg`
+    );
+    parts.push({ type: "image", file_id: fileId });
+  }
+
+  const content = JSON.stringify(parts);
   const started = await cozeFetch("/v3/chat", {
     method: "POST",
     body: JSON.stringify({
@@ -165,7 +137,8 @@ export async function extractMetaFromImage(
   };
 
   let status = chat.status;
-  for (let i = 0; i < 40; i++) {
+  // 多图上传后再对话，常见 30~70s；轮询过短会误判失败，导致名称/日期写不回
+  for (let i = 0; i < 70; i++) {
     if (
       status === "completed" ||
       status === "failed" ||
@@ -173,7 +146,7 @@ export async function extractMetaFromImage(
     ) {
       break;
     }
-    await sleep(1200);
+    await sleep(1500);
     const detail = await cozeFetch(
       `/v3/chat/retrieve?conversation_id=${encodeURIComponent(chat.conversation_id)}&chat_id=${encodeURIComponent(chat.id)}`
     );
@@ -193,15 +166,24 @@ export async function extractMetaFromImage(
   const msgRes = await cozeFetch(
     `/v3/chat/message/list?conversation_id=${encodeURIComponent(chat.conversation_id)}&chat_id=${encodeURIComponent(chat.id)}`
   );
-  const messages = (msgRes.data as Array<{
-    role: string;
-    type: string;
-    content: string;
-  }>) || [];
+  const messages =
+    (msgRes.data as Array<{
+      role: string;
+      type: string;
+      content: string;
+    }>) || [];
   const answer = messages
     .filter((m) => m.role === "assistant" && m.type === "answer" && m.content)
     .map((m) => m.content.trim())
     .join("\n");
 
-  return parseExtractJson(answer || "");
+  return parseArchiveMetaJson(answer || "");
+}
+
+/** 对单张 JPG 调用视觉 Bot，抽取材料元数据 */
+export async function extractMetaFromImage(
+  bytes: Buffer,
+  fileName = "page.jpg"
+): Promise<VisionExtractResult> {
+  return extractMetaFromImages([{ bytes, fileName }]);
 }

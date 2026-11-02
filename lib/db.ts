@@ -1,4 +1,12 @@
+import dns from "node:dns";
 import { Pool, type PoolConfig, type QueryResult, type QueryResultRow } from "pg";
+
+// 火山 PG 域名常先解析出 IPv6；本机无可用 IPv6 时会 getaddrinfo ENOTFOUND
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  /* Node < 17 */
+}
 
 declare global {
   // eslint-disable-next-line no-var
@@ -15,6 +23,8 @@ function createPool() {
 
   const config: PoolConfig = {
     connectionString,
+    // 强制走 IPv4，避免 Windows/公司网下 IPv6 解析失败
+    family: 4,
     ssl: /sslmode=require/i.test(connectionString)
       ? { rejectUnauthorized: false }
       : undefined,

@@ -14,6 +14,10 @@ import {
   upsertPageText,
 } from "@/lib/repos/page-texts";
 import { getObjectBytes } from "@/lib/storage";
+import {
+  looksLikePlaceholderName,
+  normalizeOneDate,
+} from "@/lib/vision-meta";
 
 const API = process.env.COZE_API_BASE || "https://api.coze.cn";
 /** 整件失败后的分批大小 */
@@ -51,15 +55,20 @@ const PRIORITY_NAME_RE =
 type VisionExtract = {
   fields: Record<string, string>;
   pageText: string;
+  materialTitle?: string;
   raw: string;
 };
 
 type ImageInput = { bytes: Buffer; fileName: string; pageNo: number };
 
 function buildPrompt(pageCount: number, materialName: string) {
-  return `你是干部人事档案审核助手。以下共 ${pageCount} 张图片，属于同一件材料《${materialName || "未命名"}》，已按页序排列。请综合所有页抽取字段（某页看不清则从其它页补；都没有则省略该键），只输出一行 JSON：
-{"name":"姓名","birth":"出生日期YYYY-MM-DD","work":"参加工作时间YYYY-MM-DD","party":"入党时间YYYY-MM-DD","education":"学历","degree":"学位","experience":"工作经历摘要","recognition":"组织认定摘要","pageText":"各页关键文字摘要合并，400字内"}
-禁止编造。`;
+  return `你是干部人事档案审核助手。以下共 ${pageCount} 张图片，属于同一件材料（当前标记名：${materialName || "未命名"}），已按页序排列。
+请通读全部页面，抽取可用于信息比对的具体记载（不要只返回文件名/件号），某页看不清则从其它页补；确实没有则省略该键。只输出一行 JSON：
+{"materialTitle":"材料正文题名","name":"姓名","birth":"出生日期YYYY-MM-DD","work":"参加工作时间YYYY-MM-DD","party":"入党时间YYYY-MM-DD","education":"学历","degree":"学位","experience":"工作经历摘要","recognition":"组织认定摘要","pageText":"各页关键文字摘要合并，400字内"}
+规则：
+- materialTitle：材料题名/表名，禁止用文件名、流水号
+- name/birth/work/party/education/degree/experience/recognition：必须是材料内写明的具体值，用于跨材料比对
+- 日期统一 YYYY-MM-DD；禁止编造`;
 }
 
 function parseVisionAnswer(answer: string): VisionExtract {
@@ -69,11 +78,23 @@ function parseVisionAnswer(answer: string): VisionExtract {
     const obj = JSON.parse(m[0]) as Record<string, unknown>;
     const fields: Record<string, string> = {};
     for (const k of Object.keys(FIELD_LABELS)) {
-      const v = String(obj[k] || "").trim();
-      if (v) fields[k] = v;
+      let v = String(obj[k] || "").trim();
+      if (!v) continue;
+      if (k === "birth" || k === "work" || k === "party") {
+        v = normalizeOneDate(v) || v;
+      }
+      fields[k] = v;
     }
     const pageText = String(obj.pageText || "").trim();
-    return { fields, pageText, raw: answer };
+    const materialTitle = String(obj.materialTitle || obj.material_title || "")
+      .trim()
+      .replace(/\s+/g, "");
+    return {
+      fields,
+      pageText,
+      materialTitle: materialTitle || undefined,
+      raw: answer,
+    };
   } catch {
     return { fields: {}, pageText: "", raw: answer };
   }
@@ -83,16 +104,19 @@ function mergeExtracts(parts: VisionExtract[]): VisionExtract {
   const fields: Record<string, string> = {};
   const texts: string[] = [];
   const raws: string[] = [];
+  let materialTitle: string | undefined;
   for (const p of parts) {
     for (const [k, v] of Object.entries(p.fields)) {
       if (v && !fields[k]) fields[k] = v;
     }
+    if (p.materialTitle && !materialTitle) materialTitle = p.materialTitle;
     if (p.pageText) texts.push(p.pageText);
     if (p.raw) raws.push(p.raw);
   }
   return {
     fields,
     pageText: texts.join("\n").slice(0, 2000),
+    materialTitle,
     raw: raws.join("\n").slice(0, 4000),
   };
 }
@@ -291,12 +315,33 @@ async function listPagesForAudit(personCode: string): Promise<PageRow[]> {
   return filterPages(unordered.rows);
 }
 
-/** 关键件全页，其余仅首页 */
+/**
+ * 关键件 / 名称仍是占位（文件名、流水号）→ 多页通读以便抽出比对字段；
+ * 其它件保留首页，控制调用量。
+ */
 function filterPages(rows: PageRow[]): PageRow[] {
-  return rows.filter((row) => {
-    if (row.page_no === 1) return true;
-    return PRIORITY_NAME_RE.test(row.material_name || "");
-  });
+  const byPiece = new Map<string, PageRow[]>();
+  for (const row of rows) {
+    const list = byPiece.get(row.material_no) || [];
+    list.push(row);
+    byPiece.set(row.material_no, list);
+  }
+  const out: PageRow[] = [];
+  for (const list of byPiece.values()) {
+    const sorted = [...list].sort((a, b) => a.page_no - b.page_no);
+    const name = sorted[0]?.material_name || "";
+    const needAll =
+      PRIORITY_NAME_RE.test(name) || looksLikePlaceholderName(name);
+    if (needAll) {
+      // 至多 12 页：前 8 + 末 4，兼顾履历/志愿书尾部落款
+      if (sorted.length <= 12) out.push(...sorted);
+      else out.push(...sorted.slice(0, 8), ...sorted.slice(-4));
+    } else {
+      const first = sorted.find((r) => r.page_no === 1) || sorted[0];
+      if (first) out.push(first);
+    }
+  }
+  return out;
 }
 
 function groupByPiece(pages: PageRow[]): PageRow[][] {
@@ -311,11 +356,41 @@ function groupByPiece(pages: PageRow[]): PageRow[][] {
   );
 }
 
+async function maybeUpdatePieceTitle(
+  personCode: string,
+  piece: PageRow,
+  title?: string
+) {
+  const t = (title || "").trim();
+  if (!t || looksLikePlaceholderName(t)) return piece.material_name;
+  if (!looksLikePlaceholderName(piece.material_name || "")) {
+    return piece.material_name;
+  }
+  await query(
+    `UPDATE ordered_archive_pieces
+     SET material_name = $1
+     WHERE person_code = $2 AND formal_no = $3`,
+    [t, personCode, piece.material_no]
+  );
+  await query(
+    `UPDATE archive_pieces
+     SET material_name = $1, updated_at = CURRENT_TIMESTAMP
+     WHERE person_code = $2
+       AND (serial_no = $3 OR formal_no = $3)`,
+    [t, personCode, piece.material_no]
+  );
+  return t;
+}
+
 async function insertFieldSources(
   personCode: string,
   piece: PageRow,
-  fields: Record<string, string>
+  fields: Record<string, string>,
+  materialTitle?: string
 ) {
+  const displayName =
+    (await maybeUpdatePieceTitle(personCode, piece, materialTitle)) ||
+    piece.material_name;
   const year = (piece.form_date || "").slice(0, 4);
   let n = 0;
   for (const [fieldKey, value] of Object.entries(fields)) {
@@ -328,7 +403,7 @@ async function insertFieldSources(
         personCode,
         fieldKey,
         FIELD_LABELS[fieldKey] || fieldKey,
-        piece.material_name,
+        displayName,
         year || null,
         piece.material_no,
         value,
@@ -398,26 +473,21 @@ export async function ensureAuditSourcesByVision(
     if (!head) continue;
 
     try {
-      // 件内各页均有缓存 → 合并字段，不调模型
+      // 仅当已抽出过比对字段时才走缓存；只有文件名/空字段则强制再读图
       if (!opts?.forceVision) {
         const cachedList = await Promise.all(
           piecePages.map((p) =>
             getPageText(personCode, p.material_no, p.page_no)
           )
         );
-        const allCached = cachedList.every(
-          (c) => c && (Object.keys(c.fields).length || c.textContent)
-        );
-        if (allCached) {
-          const fields: Record<string, string> = {};
-          const texts: string[] = [];
-          for (const c of cachedList) {
-            if (!c) continue;
-            for (const [k, v] of Object.entries(c.fields || {})) {
-              if (v && !fields[k]) fields[k] = v;
-            }
-            if (c.textContent) texts.push(c.textContent);
+        const fields: Record<string, string> = {};
+        for (const c of cachedList) {
+          if (!c) continue;
+          for (const [k, v] of Object.entries(c.fields || {})) {
+            if (v && !fields[k]) fields[k] = v;
           }
+        }
+        if (Object.keys(fields).length > 0) {
           fromCache += piecePages.length;
           extracted += await insertFieldSources(personCode, head, fields);
           continue;
@@ -444,6 +514,12 @@ export async function ensureAuditSourcesByVision(
       );
       fromVision += images.length;
 
+      const title =
+        result.materialTitle &&
+        !looksLikePlaceholderName(result.materialTitle)
+          ? result.materialTitle
+          : head.material_name;
+
       // 首页写合并结果；其余页写占位便于缓存命中
       for (const p of piecePages) {
         const isFirst = p.page_no === piecePages[0].page_no;
@@ -451,7 +527,7 @@ export async function ensureAuditSourcesByVision(
           personCode,
           pieceRef: p.material_no,
           pageNo: p.page_no,
-          materialName: p.material_name,
+          materialName: title,
           filePath: p.file_path || undefined,
           textContent: isFirst ? result.pageText || result.raw || "" : "",
           fields: isFirst ? result.fields : {},
@@ -462,7 +538,8 @@ export async function ensureAuditSourcesByVision(
       extracted += await insertFieldSources(
         personCode,
         head,
-        result.fields
+        result.fields,
+        result.materialTitle
       );
     } catch (e) {
       console.warn("audit vision piece failed", head.material_no, e);

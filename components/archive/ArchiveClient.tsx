@@ -10,6 +10,30 @@ import type { ArchiveCategoryCode, ArchivePiece, SortItem } from "@/types";
 
 type Cat = { code: ArchiveCategoryCode; name: string; parent?: string };
 
+/** 类目接口失败时仍保证核定分类下拉有选项（避免空白） */
+const FALLBACK_CATEGORIES: Cat[] = (
+  Object.keys(CATEGORY_SHORT) as ArchiveCategoryCode[]
+).map((code) => ({
+  code,
+  name: CATEGORY_SHORT[code],
+}));
+
+async function readJson(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  if (!text) {
+    throw new Error(
+      `接口无响应内容（HTTP ${res.status}），请检查数据库连接后重试`
+    );
+  }
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      `接口返回非 JSON（HTTP ${res.status}）：${text.slice(0, 120)}`
+    );
+  }
+}
+
 function shortSerial(serialNo: string) {
   const m = serialNo.match(/L\d+/i);
   return m ? m[0].toUpperCase() : serialNo;
@@ -48,10 +72,11 @@ export function ArchiveClient() {
 
   const loadPieces = useCallback(async (code: string) => {
     const res = await fetch(`/api/archive/pieces?personCode=${encodeURIComponent(code)}`);
-    const json = await res.json();
-    if (json.error) throw new Error(json.error);
-    setPieces(json.data || []);
-    return json.data as ArchivePiece[];
+    const json = await readJson(res);
+    if (json.error) throw new Error(String(json.error));
+    const data = (json.data || []) as ArchivePiece[];
+    setPieces(data);
+    return data;
   }, []);
 
   useEffect(() => {
@@ -65,18 +90,33 @@ export function ArchiveClient() {
   useEffect(() => {
     (async () => {
       try {
-        const [cats, rules] = await Promise.all([
-          fetch("/api/archive/categories").then((r) => r.json()),
-          fetch("/api/archive/rules").then((r) => r.json()),
+        const [catsRes, rulesRes] = await Promise.all([
+          fetch("/api/archive/categories"),
+          fetch("/api/archive/rules"),
         ]);
-        setCategories(cats.data || []);
-        setClassifyRule(rules.data?.classify || "");
-        setSortRule(rules.data?.sort || "");
+        const cats = await readJson(catsRes).catch(() => ({ data: [] }));
+        const rules = await readJson(rulesRes).catch(() => ({
+          data: { classify: "", sort: "" },
+        }));
+        const list = ((cats.data as Cat[]) || []) as Cat[];
+        setCategories(list.length ? list : FALLBACK_CATEGORIES);
+        const ruleData = (rules.data || {}) as {
+          classify?: string;
+          sort?: string;
+        };
+        setClassifyRule(ruleData.classify || "");
+        setSortRule(ruleData.sort || "");
       } catch (e) {
+        setCategories(FALLBACK_CATEGORIES);
         setError(e instanceof Error ? e.message : "加载失败");
       }
     })();
   }, []);
+
+  const categoryOptions = useMemo(
+    () => (categories.length ? categories : FALLBACK_CATEGORIES),
+    [categories]
+  );
 
   const classifiedPieces = useMemo(
     () => pieces.filter((p) => p.suggestedCategory),
@@ -194,6 +234,7 @@ export function ArchiveClient() {
             total?: number;
             done?: number;
             piece?: ArchivePiece;
+            vision?: "ok" | "skip" | "fail" | "none";
             visionEnabled?: boolean;
             visionTargets?: number;
             reason?: string;
@@ -233,7 +274,14 @@ export function ArchiveClient() {
               next[idx] = { ...prev[idx], ...ev.piece! };
               return next;
             });
-            setTip(`分类中 ${doneN}/${totalN}…`);
+            const failHint =
+              ev.vision === "fail" && ev.error
+                ? ` · 视觉失败：${ev.error}`
+                : "";
+            setTip(`分类中 ${doneN}/${totalN}${failHint}…`);
+            if (ev.vision === "fail" && ev.error) {
+              setError(`视觉提取失败（${ev.piece.serialNo}）：${ev.error}`);
+            }
           } else if (ev.type === "done") {
             lastExtracted = ev.extracted || 0;
             lastFailed = ev.failed || 0;
@@ -274,9 +322,9 @@ export function ArchiveClient() {
           confirmedCategory: code,
         }),
       });
-      const json = await res.json();
-      if (json.error) throw new Error(json.error);
-      setPieces(json.data || []);
+      const json = await readJson(res);
+      if (json.error) throw new Error(String(json.error));
+      setPieces((json.data as ArchivePiece[]) || []);
       setSorted(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "核定失败");
@@ -293,15 +341,16 @@ export function ArchiveClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ personCode }),
       });
-      const json = await res.json();
-      if (json.error) throw new Error(json.error);
-      setSorted(json.data);
+      const json = await readJson(res);
+      if (json.error) throw new Error(String(json.error));
+      const sortedData = (json.data || []) as SortItem[];
+      setSorted(sortedData);
       await loadPieces(personCode);
-      const total = (json.data || []).reduce(
+      const total = sortedData.reduce(
         (s: number, g: SortItem) => s + g.items.length,
         0
       );
-      setTip(`排序完成：${json.data?.length || 0} 个类目，共 ${total} 件`);
+      setTip(`排序完成：${sortedData.length || 0} 个类目，共 ${total} 件`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "排序失败");
     } finally {
@@ -669,7 +718,7 @@ export function ArchiveClient() {
                         <td className="px-2 py-3 text-center">
                           <select
                             className="w-[110px] h-9 rounded-md border-2 border-[#a9cdf5] bg-white text-[#2f6fc0] text-center outline-none"
-                            value={confirmed}
+                            value={confirmed || "1000"}
                             onChange={(e) =>
                               onConfirmCategory(
                                 p,
@@ -677,7 +726,7 @@ export function ArchiveClient() {
                               )
                             }
                           >
-                            {categories.map((c) => (
+                            {categoryOptions.map((c) => (
                               <option key={c.code} value={c.code}>
                                 {CATEGORY_SHORT[c.code] || c.code}
                               </option>
@@ -753,7 +802,7 @@ export function ArchiveClient() {
                 </tr>
               </thead>
               <tbody>
-                {categories.map((cat) => {
+                {categoryOptions.map((cat) => {
                   const items = sortedByCat.get(cat.code) || [];
                   return (
                     <FragmentCat
@@ -852,8 +901,10 @@ export function ArchiveClient() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ classify: next }),
           });
-          const j = await res.json();
-          setClassifyRule(j.data.classify);
+          const j = await readJson(res);
+          if (j.error) throw new Error(String(j.error));
+          const data = (j.data || {}) as { classify?: string };
+          setClassifyRule(data.classify || next);
           setTip("分类规则文案已保存（引擎仍按内置逻辑；请重新「开始分类」）");
         }}
       />
@@ -869,8 +920,10 @@ export function ArchiveClient() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ sort: next }),
           });
-          const j = await res.json();
-          setSortRule(j.data.sort);
+          const j = await readJson(res);
+          if (j.error) throw new Error(String(j.error));
+          const data = (j.data || {}) as { sort?: string };
+          setSortRule(data.sort || next);
           setTip("排序规则文案已保存；重新「开始排序」按内置引擎生效");
         }}
       />

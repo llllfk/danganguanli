@@ -8,20 +8,13 @@
  *   ARK_API_BASE      （默认 https://ark.cn-beijing.volces.com）
  */
 
-export type VisionExtractResult = {
-  materialName?: string;
-  formDate?: string;
-  summary?: string;
-  raw?: string;
-};
+import {
+  ARCHIVE_META_PROMPT,
+  parseArchiveMetaJson,
+  type VisionExtractResult,
+} from "@/lib/vision-meta";
 
-const EXTRACT_PROMPT = `你是干部人事档案材料识别助手。请阅读图片（档案扫描件首页），只提取下列字段，严格输出一行 JSON，不要 Markdown，不要其它说明：
-{"materialName":"材料全称","formDate":"YYYY-MM-DD或空字符串","summary":"不超过30字的摘要"}
-
-规则：
-- materialName：页面标题/表格名称，如「干部履历表」「毕业生登记表」「干部任免审批表」等，不要流水号
-- formDate：落款日期、填表日期或材料形成日期；看不清则 ""
-- 禁止编造看不到的内容`;
+export type { VisionExtractResult };
 
 function arkKey() {
   return (
@@ -53,40 +46,11 @@ export function isDoubaoVisionConfigured() {
   return Boolean(arkKey() && arkModel());
 }
 
-function parseExtractJson(text: string): VisionExtractResult {
-  const raw = text.trim();
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) return { raw };
-  try {
-    const obj = JSON.parse(m[0]) as Record<string, unknown>;
-    const materialName = String(obj.materialName || obj.material_name || "")
-      .trim()
-      .replace(/\s+/g, "");
-    let formDate = String(obj.formDate || obj.form_date || "").trim();
-    const dm = formDate.match(/(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})/);
-    if (dm) {
-      formDate = `${dm[1]}-${dm[2].padStart(2, "0")}-${dm[3].padStart(2, "0")}`;
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(formDate)) {
-      formDate = "";
-    }
-    const summary = String(obj.summary || "")
-      .trim()
-      .slice(0, 80);
-    return {
-      materialName: materialName || undefined,
-      formDate: formDate || undefined,
-      summary: summary || undefined,
-      raw,
-    };
-  } catch {
-    return { raw };
-  }
-}
+type ImageInput = { bytes: Buffer; fileName?: string };
 
-/** 直接调用方舟豆包视觉，图片用 base64 data URL */
-export async function extractMetaFromImageDoubao(
-  bytes: Buffer,
-  _fileName = "page.jpg"
+/** 直接调用方舟豆包视觉，支持多图 */
+export async function extractMetaFromImagesDoubao(
+  images: ImageInput[]
 ): Promise<VisionExtractResult> {
   const key = arkKey();
   const model = arkModel();
@@ -95,9 +59,20 @@ export async function extractMetaFromImageDoubao(
       "未配置 ARK_API_KEY / ARK_VISION_MODEL（火山方舟豆包视觉接入点）"
     );
   }
+  if (!images.length) return {};
 
-  const b64 = bytes.toString("base64");
-  const dataUrl = `data:image/jpeg;base64,${b64}`;
+  const content: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [{ type: "text", text: ARCHIVE_META_PROMPT }];
+
+  for (const img of images) {
+    const b64 = img.bytes.toString("base64");
+    content.push({
+      type: "image_url",
+      image_url: { url: `data:image/jpeg;base64,${b64}` },
+    });
+  }
 
   const res = await fetch(`${arkBase()}/api/v3/chat/completions`, {
     method: "POST",
@@ -107,17 +82,9 @@ export async function extractMetaFromImageDoubao(
     },
     body: JSON.stringify({
       model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: EXTRACT_PROMPT },
-            { type: "image_url", image_url: { url: dataUrl } },
-          ],
-        },
-      ],
+      messages: [{ role: "user", content }],
       temperature: 0.1,
-      max_tokens: 512,
+      max_tokens: 768,
     }),
   });
 
@@ -130,6 +97,13 @@ export async function extractMetaFromImageDoubao(
       `豆包视觉调用失败: ${json.error?.message || res.statusText}`
     );
   }
-  const content = json.choices?.[0]?.message?.content || "";
-  return parseExtractJson(content);
+  const answer = json.choices?.[0]?.message?.content || "";
+  return parseArchiveMetaJson(answer);
+}
+
+export async function extractMetaFromImageDoubao(
+  bytes: Buffer,
+  fileName = "page.jpg"
+): Promise<VisionExtractResult> {
+  return extractMetaFromImagesDoubao([{ bytes, fileName }]);
 }

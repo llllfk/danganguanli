@@ -36,30 +36,36 @@ export async function POST(request: NextRequest) {
 
     let visionNote = "";
     const before = await countAuditSources(personCode);
+    // 已有出处但关键比对字段（姓名/出生等）过少 → 视为未真正读出，自动重抽
+    const keyCover = await query<{ n: number }>(
+      `SELECT count(DISTINCT field_key)::int AS n
+       FROM audit_field_sources
+       WHERE person_code = $1
+         AND field_key = ANY($2::text[])
+         AND nullif(trim(value), '') IS NOT NULL`,
+      [personCode, ["name", "birth", "work", "party", "education", "degree"]]
+    );
+    const thinSources = before > 0 && (keyCover.rows[0]?.n || 0) < 2;
 
-    if (body.forceVision) {
+    if (body.forceVision || (!body.rulesOnly && (before === 0 || thinSources))) {
       const v = await ensureAuditSourcesByVision(personCode, {
-        force: true,
-        forceVision: true,
+        force: body.forceVision || thinSources,
+        forceVision: !!body.forceVision,
       });
-      visionNote = `强制重读影像：缓存页 ${v.fromCache}，视觉 ${v.fromVision}，写入出处 ${v.extracted}；`;
       if (v.reason === "no_page_files") {
         visionNote = "无可用扫描页文件；";
       } else if (v.reason === "vision_not_configured") {
-        visionNote = "未配置视觉 Bot；";
-      }
-    } else if (!body.rulesOnly && before === 0) {
-      const v = await ensureAuditSourcesByVision(personCode);
-      if (v.extracted > 0) {
+        visionNote = body.forceVision
+          ? "未配置视觉 Bot；"
+          : "未配置视觉 Bot，且库中无比对出处；";
+      } else if (body.forceVision) {
+        visionNote = `强制重读影像：缓存页 ${v.fromCache}，视觉 ${v.fromVision}，写入出处 ${v.extracted}；`;
+      } else if (thinSources) {
+        visionNote = `原出处缺少比对字段，已重抽：写入 ${v.extracted}（缓存 ${v.fromCache} / 视觉 ${v.fromVision}）；`;
+      } else if (v.extracted > 0) {
         visionNote = `补齐出处 ${v.extracted}（缓存 ${v.fromCache} 页 / 视觉 ${v.fromVision} 页）；`;
-      } else if (v.reason === "vision_not_configured") {
-        visionNote =
-          "未配置视觉 Bot，且库中无该人出处；";
-      } else if (v.reason === "no_page_files") {
-        visionNote =
-          "无可用首页文件（需有序扫描件或整编件带本地/S3 路径）；";
-      } else if (!v.skipped && v.extracted === 0) {
-        visionNote = "已尝试提取但未写出字段；";
+      } else if (!v.skipped) {
+        visionNote = "已尝试提取但未写出比对字段；";
       }
     } else {
       visionNote =

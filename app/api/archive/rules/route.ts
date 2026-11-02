@@ -2,13 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRules, updateRules } from "@/lib/store";
 
 export async function GET() {
-  const rules = await getRules();
-  return NextResponse.json({
-    data: {
-      classify: rules.classify,
-      sort: rules.sort,
-    },
-  });
+  try {
+    const rules = await getRules();
+    return NextResponse.json({
+      data: {
+        classify: rules.classify,
+        sort: rules.sort,
+      },
+    });
+  } catch (e) {
+    // 库瞬时不可达时仍返回空规则，避免前端 r.json() 遇到空 body 报错
+    return NextResponse.json({
+      data: { classify: "", sort: "" },
+      error: e instanceof Error ? e.message : "读取规则失败",
+      fallback: true,
+    });
+  }
 }
 
 export async function PUT(request: NextRequest) {

@@ -1,4 +1,6 @@
+import path from "node:path";
 import { query } from "@/lib/db";
+import { looksLikePlaceholderName } from "@/lib/vision-meta";
 import type { ArchiveCategoryCode, ArchivePiece, SortItem } from "@/types";
 export async function listCategories() {
   const r = await query<{ code: string; name: string; parent_code: string | null }>(
@@ -61,13 +63,14 @@ export async function listPieces(personCode = "00001"): Promise<ArchivePiece[]> 
   return pieces;
 }
 
-function needsVisionExtract(materialName: string | undefined, serialNo: string) {
-  const name = (materialName || "").trim();
-  if (!name) return true;
-  if (name === serialNo) return true;
-  // 仍是流水号形态，未识别出真实材料名
-  if (/^\d{4,}-L\d+/i.test(name)) return true;
-  return false;
+function needsVisionExtract(
+  materialName: string | undefined,
+  serialNo: string,
+  formDate?: string | null
+) {
+  // 缺形成日期必须再抽（客户：通读材料取最后一个日期）
+  if (!(formDate || "").trim()) return true;
+  return looksLikePlaceholderName(materialName || "", serialNo);
 }
 
 type ClassifyKeyword = { code: ArchiveCategoryCode; keyword: string };
@@ -159,11 +162,45 @@ async function writeKeywordClassify(
   return code;
 }
 
+/**
+ * 多图必须放在「同一条」object_string 里（text + 多个 image.file_id）。
+ * 若拆成多条 user 消息，Bot/日志往往只保留最后一张（会出现只收到非首页）。
+ * 默认送首页+中间+末页，控制耗时。
+ */
+const ARCHIVE_VISION_MAX_PAGES = Math.max(
+  2,
+  Math.min(parseInt(process.env.COZE_ARCHIVE_VISION_PAGES || "3", 10) || 3, 8)
+);
+
+function pickPagesForMeta<T extends { page_no: number }>(pages: T[]): T[] {
+  if (!pages.length) return [];
+  if (pages.length <= ARCHIVE_VISION_MAX_PAGES) return pages;
+  if (ARCHIVE_VISION_MAX_PAGES <= 2) {
+    return [pages[0], pages[pages.length - 1]];
+  }
+  if (ARCHIVE_VISION_MAX_PAGES === 3) {
+    const mid = pages[Math.floor((pages.length - 1) / 2)];
+    return [pages[0], mid, pages[pages.length - 1]];
+  }
+  const head = Math.ceil(ARCHIVE_VISION_MAX_PAGES / 2);
+  const tail = ARCHIVE_VISION_MAX_PAGES - head;
+  return [...pages.slice(0, head), ...pages.slice(-tail)];
+}
+
+function pageUploadName(
+  serialNo: string,
+  row: { file_name: string | null; page_no: number }
+) {
+  const base = row.file_name ? path.basename(row.file_name.replace(/\\/g, "/")) : "";
+  if (base && /\.jpe?g$/i.test(base)) return base;
+  return `${serialNo}-${String(row.page_no).padStart(3, "0")}.jpg`;
+}
+
 async function visionExtractOnePiece(
   personCode: string,
   serialNo: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const { isCozeVisionConfigured, extractMetaFromImage } = await import(
+  const { isCozeVisionConfigured, extractMetaFromImages } = await import(
     "@/lib/coze-vision"
   );
   const { getObjectBytes } = await import("@/lib/storage");
@@ -174,37 +211,64 @@ async function visionExtractOnePiece(
   const page = await query<{
     file_path: string | null;
     file_name: string | null;
+    page_no: number;
   }>(
-    `SELECT pg.file_path, pg.file_name
+    `SELECT pg.file_path, pg.file_name, pg.page_no
      FROM archive_pages pg
      JOIN archive_pieces ap ON ap.id = pg.piece_id
      WHERE ap.person_code = $1 AND ap.serial_no = $2
-     ORDER BY pg.page_no ASC
-     LIMIT 1`,
+     ORDER BY pg.page_no ASC`,
     [personCode, serialNo]
   );
-  const row = page.rows[0];
-  if (!row?.file_path && !row?.file_name) {
+  if (!page.rows.length) {
     return { ok: false, error: "无首页文件" };
   }
   try {
-    const bytes = await getObjectBytes(row.file_path || row.file_name || "");
-    const meta = await extractMetaFromImage(
-      bytes,
-      row.file_name || `${serialNo}-001.jpg`
-    );
+    const images: Array<{ bytes: Buffer; fileName: string }> = [];
+    for (const row of pickPagesForMeta(page.rows)) {
+      const key = row.file_path || row.file_name || "";
+      if (!key) continue;
+      const bytes = await getObjectBytes(key);
+      images.push({
+        bytes,
+        fileName: pageUploadName(serialNo, row),
+      });
+    }
+    if (!images.length) {
+      return { ok: false, error: "无首页文件" };
+    }
+    // 正确多图：一条消息内 text + 多个 {type:image,file_id}
+    const meta = await extractMetaFromImages(images);
     if (!meta.materialName && !meta.formDate) {
       return { ok: false, error: "视觉未返回有效字段" };
     }
+    const cur = await query<{ material_name: string | null }>(
+      `SELECT material_name FROM archive_pieces
+       WHERE person_code = $1 AND serial_no = $2`,
+      [personCode, serialNo]
+    );
+    const curName = cur.rows[0]?.material_name || "";
+    const nextName =
+      meta.materialName &&
+      (looksLikePlaceholderName(curName, serialNo) || !curName)
+        ? meta.materialName
+        : curName || meta.materialName || "";
+
     await query(
       `UPDATE archive_pieces
-       SET material_name = COALESCE(NULLIF($1, ''), material_name),
-           form_date = COALESCE(NULLIF($2, ''), form_date),
+       SET material_name = CASE
+             WHEN NULLIF($1, '') IS NOT NULL THEN $1
+             ELSE material_name
+           END,
+           form_date = CASE
+             WHEN NULLIF($2, '') IS NOT NULL THEN $2
+             ELSE form_date
+           END,
            summary = COALESCE(NULLIF($3, ''), summary),
            updated_at = CURRENT_TIMESTAMP
        WHERE person_code = $4 AND serial_no = $5`,
       [
-        meta.materialName || "",
+        nextName,
         meta.formDate || "",
         meta.summary || "",
         personCode,
@@ -245,7 +309,9 @@ export async function extractPersonPiecesWithVision(
   const errors: Array<{ serialNo: string; error: string }> = [];
 
   const targets = pieces.filter(
-    (p) => opts?.force || needsVisionExtract(p.materialName, p.serialNo)
+    (p) =>
+      opts?.force ||
+      needsVisionExtract(p.materialName, p.serialNo, p.formDate)
   );
 
   async function runOne(p: (typeof pieces)[0]) {
@@ -329,7 +395,9 @@ export async function classifyPersonPiecesProgressive(
   const total = pieces.length;
   const visionEnabled = !opts.skipVision && isCozeVisionConfigured();
   const visionTargets = pieces.filter(
-    (p) => opts.forceVision || needsVisionExtract(p.materialName, p.serialNo)
+    (p) =>
+      opts.forceVision ||
+      needsVisionExtract(p.materialName, p.serialNo, p.formDate)
   ).length;
 
   await opts.onEvent({
@@ -365,7 +433,8 @@ export async function classifyPersonPiecesProgressive(
     let vision: "ok" | "skip" | "fail" | "none" = "none";
     let err: string | undefined;
     const needVision =
-      opts.forceVision || needsVisionExtract(p.materialName, p.serialNo);
+      opts.forceVision ||
+      needsVisionExtract(p.materialName, p.serialNo, p.formDate);
 
     if (needVision) {
       if (visionEnabled) {
@@ -620,8 +689,10 @@ export async function upsertUploadedPieces(inputs: UploadPieceInput[]) {
       [piece.personCode, piece.serialNo]
     );
 
-    const materialName =
-      existing.rows[0]?.material_name || piece.materialName || piece.serialNo;
+    const prevName = existing.rows[0]?.material_name || "";
+    const materialName = looksLikePlaceholderName(prevName, piece.serialNo)
+      ? piece.materialName || piece.serialNo
+      : prevName || piece.materialName || piece.serialNo;
     const formDate = existing.rows[0]?.form_date || piece.formDate || null;
     const summary = existing.rows[0]?.summary || null;
     const pageCount = piece.pages.length || 1;

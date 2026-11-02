@@ -18,11 +18,13 @@
 ```env
 COZE_API_TOKEN=你的个人访问令牌
 COZE_BOT_ID=7700834694778617891
+COZE_DATASET_ID=档案政策知识库ID
 # 智能整编：视觉提取材料名/形成日期（另建视觉理解 Bot 并发布 API）
 COZE_VISION_BOT_ID=
 ```
 
-`/api/policy/ask` 优先调用扣子 `/v3/chat`；失败时回退本地 `policy_documents` 表。
+`/api/policy/ask` 优先调用扣子 `/v3/chat`；失败时回退本地 `policy_documents` 表。  
+「政策知识库原文」页支持上传/新建/编辑/删除，并同步到 `COZE_DATASET_ID` 对应扣子知识库。
 
 ### 智能整编 · 扣子视觉
 
