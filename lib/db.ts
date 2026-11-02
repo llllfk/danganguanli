@@ -23,8 +23,6 @@ function createPool() {
 
   const config: PoolConfig = {
     connectionString,
-    // 强制走 IPv4，避免 Windows/公司网下 IPv6 解析失败
-    family: 4,
     ssl: /sslmode=require/i.test(connectionString)
       ? { rejectUnauthorized: false }
       : undefined,
@@ -33,7 +31,8 @@ function createPool() {
     connectionTimeoutMillis: 10_000,
   };
 
-  const p = new Pool(config);
+  // family 走底层连接选项；@types/pg 的 PoolConfig 未声明该字段
+  const p = new Pool({ ...config, family: 4 } as PoolConfig);
   p.on("connect", (client) => {
     // 避免单条 SQL 卡死占满连接池
     void client.query("SET statement_timeout TO 20000");

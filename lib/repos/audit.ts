@@ -50,8 +50,19 @@ export async function listPersons() {
   }));
 }
 
+export type PersonMaterial = {
+  category: string;
+  materialName: string;
+  serialNo: string;
+  pageCount: number;
+  formalNo: string | null;
+  source: "ordered" | "unordered";
+};
+
 /** 审核数据源：优先附件6 有序件；无则回退乱序件（整编结果） */
-export async function getPersonMaterials(personCode: string) {
+export async function getPersonMaterials(
+  personCode: string
+): Promise<PersonMaterial[]> {
   const ordered = await query<{
     category_code: string;
     material_name: string;
