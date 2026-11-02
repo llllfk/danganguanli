@@ -21,20 +21,26 @@ API_TOKEN=你的个人访问令牌
 POLICY_BOT_ID=7700834694778617891
 POLICY_DATASET_ID=档案政策知识库ID
 VISION_BOT_ID=视觉理解智能体ID
+# 可选：专用分类 Bot；不配则复用 VISION_BOT_ID / POLICY_BOT_ID
+CLASSIFY_BOT_ID=
 # 本地开发仍可继续写 COZE_API_TOKEN / COZE_VISION_BOT_ID 等（兼容）
 ```
+
+分类流程：视觉抽题名 → 智能体按「修正规则」文案返回类号 → 失败则 `classify_keywords` 关键词兜底。
+
 
 `/api/policy/ask` 优先调用扣子 `/v3/chat`；失败时回退本地 `policy_documents` 表。  
 「政策知识库原文」页支持上传/删除，并同步到 `POLICY_DATASET_ID` 对应扣子知识库。
 
 ### 智能整编 · 扣子视觉
 
-点「开始分类」时会先对材料页 JPG 调用视觉 Bot：上传文件 → `/v3/chat` 多模态 → 写回 `material_name` / `form_date`，再按关键词分类。
+点「开始分类」时：视觉提取题名/日期 → 分类智能体按「修正规则」返回类号 → 失败则 `classify_keywords` 关键词兜底。
 
 1. 扣子中新建单 Agent，模型选 **豆包·视觉理解**（或其它视觉模型）
 2. 提示词可沿用「只输出 JSON：materialName / formDate / summary」
 3. 发布为 **API**，把 Bot ID 填入 `VISION_BOT_ID`（勿用 `COZE_` 前缀）
 4. 令牌 `API_TOKEN` 需具备 `chat` + `uploadFile` 权限
+5. 可选：再建文本分类 Bot 填入 `CLASSIFY_BOT_ID`；不配则复用 `VISION_BOT_ID` / `POLICY_BOT_ID`
 
 ## 数据库
 

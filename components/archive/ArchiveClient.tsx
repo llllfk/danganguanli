@@ -893,7 +893,7 @@ export function ArchiveClient() {
         open={ruleModal === "classify"}
         title="分类规则"
         value={classifyRule}
-        hint="此处保存规则说明文案。当前分类仍按系统内置关键词与视觉识别执行；改文案不会立刻改变结果，需重新点击「开始分类」。"
+        hint="此处保存的分类规则文案会传给分类智能体（开始分类时）。智能体失败时仍回退 classify_keywords 关键词表。改完后请重新「开始分类」。"
         onClose={() => setRuleModal(null)}
         onSave={async (next) => {
           const res = await fetch("/api/archive/rules", {
@@ -905,7 +905,7 @@ export function ArchiveClient() {
           if (j.error) throw new Error(String(j.error));
           const data = (j.data || {}) as { classify?: string };
           setClassifyRule(data.classify || next);
-          setTip("分类规则文案已保存（引擎仍按内置逻辑；请重新「开始分类」）");
+          setTip("分类规则文案已保存（下次「开始分类」将传给智能体；失败仍走关键词）");
         }}
       />
       <RuleEditorModal

@@ -43,6 +43,11 @@ export function visionBotId() {
   );
 }
 
+/** 智能分类专用 Bot；未配时由 classify-agent 回退到视觉/政策 Bot */
+export function classifyBotIdEnv() {
+  return first("CLASSIFY_BOT_ID", "ARCHIVE_CLASSIFY_BOT_ID");
+}
+
 /** 政策知识库 dataset id */
 export function policyDatasetId() {
   return first(

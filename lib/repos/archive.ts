@@ -141,13 +141,11 @@ async function getPiece(
   };
 }
 
-async function writeKeywordClassify(
+async function persistClassify(
   personCode: string,
   serialNo: string,
-  materialName: string,
-  rules: ClassifyKeyword[]
-): Promise<ArchiveCategoryCode> {
-  const code = matchCategory(materialName || "", rules);
+  code: ArchiveCategoryCode
+) {
   await query(
     `UPDATE archive_pieces
      SET suggested_category = $1,
@@ -159,7 +157,66 @@ async function writeKeywordClassify(
      WHERE person_code = $2 AND serial_no = $3`,
     [code, personCode, serialNo]
   );
-  return code;
+}
+
+/**
+ * 分类：优先智能体（材料题名 + 分类规则文案），失败/非法则关键词表兜底。
+ */
+async function writeClassifyWithFallback(
+  personCode: string,
+  serialNo: string,
+  materialName: string,
+  rules: ClassifyKeyword[],
+  opts?: { ruleText?: string; keywordHint?: string }
+): Promise<{
+  code: ArchiveCategoryCode;
+  via: "agent" | "keyword";
+}> {
+  const name = (materialName || "").trim();
+  // 流水号/文件名占位时不调智能体，直接关键词（通常会落到 1000）
+  const canAskAgent = Boolean(name) && !looksLikePlaceholderName(name, serialNo);
+  try {
+    const { isClassifyAgentConfigured, classifyByAgent } = await import(
+      "@/lib/classify-agent"
+    );
+    if (isClassifyAgentConfigured() && canAskAgent) {
+      const agentCode = await classifyByAgent({
+        materialName: name,
+        ruleText: opts?.ruleText,
+        keywordHint: opts?.keywordHint,
+      });
+      if (agentCode) {
+        await persistClassify(personCode, serialNo, agentCode);
+        return { code: agentCode, via: "agent" };
+      }
+    }
+  } catch (e) {
+    console.warn(
+      "classify agent failed, fallback keywords",
+      serialNo,
+      e instanceof Error ? e.message : e
+    );
+  }
+
+  const code = matchCategory(name, rules);
+  await persistClassify(personCode, serialNo, code);
+  return { code, via: "keyword" };
+}
+
+/** @deprecated 保留旧名，内部走智能体+关键词 */
+async function writeKeywordClassify(
+  personCode: string,
+  serialNo: string,
+  materialName: string,
+  rules: ClassifyKeyword[]
+): Promise<ArchiveCategoryCode> {
+  const r = await writeClassifyWithFallback(
+    personCode,
+    serialNo,
+    materialName,
+    rules
+  );
+  return r.code;
 }
 
 /**
@@ -348,13 +405,25 @@ export async function extractPersonPiecesWithVision(
 
 export async function classifyPersonPieces(personCode = "00001") {
   const rules = await loadClassifyKeywords();
+  const { formatKeywordHint } = await import("@/lib/classify-agent");
+  const { getRules } = await import("@/lib/store");
+  const ruleBundle = await getRules().catch(() => ({
+    classify: "",
+    sort: "",
+    audit: "",
+    completeness: "",
+  }));
+  const keywordHint = formatKeywordHint(
+    rules.map((r) => ({ code: r.code, keyword: r.keyword }))
+  );
   const pieces = await listPieces(personCode);
   for (const p of pieces) {
-    await writeKeywordClassify(
+    await writeClassifyWithFallback(
       personCode,
       p.serialNo,
       p.materialName || "",
-      rules
+      rules,
+      { ruleText: ruleBundle.classify || "", keywordHint }
     );
   }
   return listPieces(personCode);
@@ -386,7 +455,7 @@ export type ClassifyProgressEvent =
   | { type: "error"; error: string };
 
 /**
- * 逐件：视觉提取（如需）→ 立即关键词分类落库 → 回调进度。
+ * 逐件：视觉提取（如需）→ 智能体分类（规则）→ 关键词兜底 → 回调进度。
  */
 export async function classifyPersonPiecesProgressive(
   personCode = "00001",
@@ -398,26 +467,47 @@ export async function classifyPersonPiecesProgressive(
   }
 ) {
   const { isCozeVisionConfigured } = await import("@/lib/coze-vision");
+  const { isClassifyAgentConfigured, formatKeywordHint } = await import(
+    "@/lib/classify-agent"
+  );
+  const { getRules } = await import("@/lib/store");
   const rules = await loadClassifyKeywords();
+  const ruleBundle = await getRules().catch(() => ({
+    classify: "",
+    sort: "",
+    audit: "",
+    completeness: "",
+  }));
+  const keywordHint = formatKeywordHint(
+    rules.map((r) => ({ code: r.code, keyword: r.keyword }))
+  );
   const pieces = await listPieces(personCode);
   const total = pieces.length;
   const visionEnabled = !opts.skipVision && isCozeVisionConfigured();
+  const classifyAgentEnabled = isClassifyAgentConfigured();
   const visionTargets = pieces.filter(
     (p) =>
       opts.forceVision ||
       needsVisionExtract(p.materialName, p.serialNo, p.formDate)
   ).length;
 
+  const reasonParts: string[] = [];
+  if (!visionEnabled) {
+    reasonParts.push(
+      opts.skipVision ? "已跳过视觉" : "未配置 VISION_BOT_ID，跳过视觉提取"
+    );
+  }
+  reasonParts.push(
+    classifyAgentEnabled
+      ? "分类：智能体优先，关键词兜底"
+      : "分类：仅关键词（未配置 API_TOKEN / Bot）"
+  );
   await opts.onEvent({
     type: "start",
     total,
     visionTargets,
     visionEnabled,
-    reason: visionEnabled
-      ? undefined
-      : opts.skipVision
-        ? "已跳过视觉"
-        : "未配置 VISION_BOT_ID",
+    reason: reasonParts.join("；"),
   });
 
   if (!total) {
@@ -431,7 +521,8 @@ export async function classifyPersonPiecesProgressive(
     return [];
   }
 
-  const concurrency = Math.max(1, Math.min(opts.concurrency || 2, 3));
+  // 分类含智能体调用，并发不宜过高
+  const concurrency = Math.max(1, Math.min(opts.concurrency || 2, 2));
   let done = 0;
   let extracted = 0;
   let failed = 0;
@@ -458,11 +549,15 @@ export async function classifyPersonPiecesProgressive(
     }
 
     const afterVision = (await getPiece(personCode, p.serialNo)) || p;
-    await writeKeywordClassify(
+    await writeClassifyWithFallback(
       personCode,
       afterVision.serialNo,
       afterVision.materialName || "",
-      rules
+      rules,
+      {
+        ruleText: ruleBundle.classify || "",
+        keywordHint,
+      }
     );
     const updated = (await getPiece(personCode, p.serialNo)) || afterVision;
 
