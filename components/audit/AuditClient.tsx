@@ -143,7 +143,7 @@ export function AuditClient() {
       let msg = e instanceof Error ? e.message : "上传失败";
       if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) {
         msg =
-          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP / 分批上传；扣子环境请确认已注入 COZE_STORAGE_* 对象存储。";
+          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP / 分批上传；扣子请确认已开通对象存储（COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME）。";
       }
       setError(msg);
       setTip("");

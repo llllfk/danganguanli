@@ -175,7 +175,7 @@ export async function POST(request: NextRequest) {
     console.error("audit upload failed", e);
     const msg = e instanceof Error ? e.message : "上传失败";
     const status =
-      /对象存储|扣子运行环境|COZE_STORAGE/i.test(msg) ? 503 : 500;
+      /对象存储|扣子运行环境|COZE_STORAGE|COZE_BUCKET/i.test(msg) ? 503 : 500;
     return NextResponse.json({ error: msg }, { status });
   }
 }

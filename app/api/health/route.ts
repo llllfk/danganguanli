@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import pool, { hasDatabase } from "@/lib/db";
-import { hasStorage } from "@/lib/storage";
+import { hasStorage, storageDiagnostics } from "@/lib/storage";
 
 export async function GET() {
   let databaseOk = false;
@@ -32,6 +32,7 @@ export async function GET() {
       databaseError,
       counts,
       storage: hasStorage(),
+      storageDetail: storageDiagnostics(),
       time: new Date().toISOString(),
     },
   });
