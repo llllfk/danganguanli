@@ -2,13 +2,19 @@
  * 扣子知识库文档 CRUD
  * POST /open_api/knowledge/document/{list,create,update,delete}
  *
- * 环境变量：
- *   COZE_API_TOKEN / COZE_PAT
- *   COZE_DATASET_ID（政策知识库 ID）
- *   COZE_API_BASE（默认 https://api.coze.cn）
+ * 自定义环境变量（扣子勿用 COZE_ 前缀）：
+ *   API_TOKEN / POLICY_DATASET_ID
+ * 本地仍可兼容 COZE_API_TOKEN / COZE_DATASET_ID
  */
 
-const API = process.env.COZE_API_BASE || "https://api.coze.cn";
+import {
+  cozeApiBase,
+  cozeApiToken,
+  isKnowledgeConfigured,
+  policyDatasetId,
+} from "@/lib/coze-env";
+
+const API = cozeApiBase();
 
 const DEFAULT_CHUNK = {
   chunk_type: 0,
@@ -18,23 +24,17 @@ const DEFAULT_CHUNK = {
 };
 
 function token() {
-  const t = process.env.COZE_API_TOKEN || process.env.COZE_PAT || "";
-  if (!t) throw new Error("未配置 COZE_API_TOKEN");
+  const t = cozeApiToken();
+  if (!t) throw new Error("未配置 API_TOKEN（或本地 COZE_API_TOKEN）");
   return t;
 }
 
 export function cozeDatasetId() {
-  return (
-    process.env.COZE_DATASET_ID ||
-    process.env.COZE_POLICY_DATASET_ID ||
-    ""
-  );
+  return policyDatasetId();
 }
 
 export function isCozeKnowledgeConfigured() {
-  return Boolean(
-    (process.env.COZE_API_TOKEN || process.env.COZE_PAT) && cozeDatasetId()
-  );
+  return isKnowledgeConfigured();
 }
 
 async function api<T = Record<string, unknown>>(
@@ -80,7 +80,7 @@ export async function listCozeDocuments(opts?: {
   pageSize?: number;
 }): Promise<CozeDocumentInfo[]> {
   const datasetId = opts?.datasetId || cozeDatasetId();
-  if (!datasetId) throw new Error("未配置 COZE_DATASET_ID");
+  if (!datasetId) throw new Error("未配置 POLICY_DATASET_ID");
   const size = Math.min(Math.max(opts?.pageSize || 50, 1), 50);
   const all: CozeDocumentInfo[] = [];
   for (let page = 1; page <= 40; page++) {
@@ -111,7 +111,7 @@ export async function createCozeDocument(
   input: CreateCozeDocInput
 ): Promise<CozeDocumentInfo> {
   const datasetId = input.datasetId || cozeDatasetId();
-  if (!datasetId) throw new Error("未配置 COZE_DATASET_ID");
+  if (!datasetId) throw new Error("未配置 POLICY_DATASET_ID");
   if (!input.bytes?.length) throw new Error("文件内容为空");
   if (input.bytes.length > 20 * 1024 * 1024) {
     throw new Error("单文件不能超过 20MB");

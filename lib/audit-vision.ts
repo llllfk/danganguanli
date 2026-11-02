@@ -10,6 +10,11 @@ import {
   uploadCozeFile,
 } from "@/lib/coze-vision";
 import {
+  cozeApiBase,
+  cozeApiToken,
+  visionBotId,
+} from "@/lib/coze-env";
+import {
   getPageText,
   upsertPageText,
 } from "@/lib/repos/page-texts";
@@ -19,23 +24,21 @@ import {
   normalizeOneDate,
 } from "@/lib/vision-meta";
 
-const API = process.env.COZE_API_BASE || "https://api.coze.cn";
+const API = cozeApiBase();
 /** 整件失败后的分批大小 */
 const BATCH_SIZE = Math.max(
   2,
-  Math.min(parseInt(process.env.COZE_VISION_BATCH || "6", 10) || 6, 12)
+  Math.min(
+    parseInt(
+      process.env.VISION_BATCH || process.env.COZE_VISION_BATCH || "6",
+      10
+    ) || 6,
+    12
+  )
 );
 
 function token() {
-  return process.env.COZE_API_TOKEN || process.env.COZE_PAT || "";
-}
-
-function visionBotId() {
-  return (
-    process.env.COZE_VISION_BOT_ID ||
-    process.env.COZE_ARCHIVE_BOT_ID ||
-    ""
-  );
+  return cozeApiToken();
 }
 
 export const FIELD_LABELS: Record<string, string> = {

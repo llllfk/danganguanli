@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       provider?: string;
     };
 
-    if (isCozeBotConfigured() && process.env.COZE_API_TOKEN) {
+    if (isCozeBotConfigured()) {
       try {
         const bot = await askCozeBot(
           question,

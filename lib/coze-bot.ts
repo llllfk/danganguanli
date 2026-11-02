@@ -1,18 +1,21 @@
 /**
  * 扣子智能体对话（政策问答）
  * Bot: https://www.coze.cn/space/.../bot/7700834694778617891
+ * 自定义环境变量请用 POLICY_BOT_ID / API_TOKEN（勿用 COZE_ 前缀）
  */
 
-const API = process.env.COZE_API_BASE || "https://api.coze.cn";
+import { cozeApiBase, cozeApiToken, policyBotId } from "@/lib/coze-env";
+
+const API = cozeApiBase();
 
 function token() {
-  const t = process.env.COZE_API_TOKEN || process.env.COZE_PAT;
-  if (!t) throw new Error("未配置 COZE_API_TOKEN，无法调用扣子智能体");
+  const t = cozeApiToken();
+  if (!t) throw new Error("未配置 API_TOKEN（或本地 COZE_API_TOKEN），无法调用扣子智能体");
   return t;
 }
 
 function botId() {
-  return process.env.COZE_BOT_ID || "7700834694778617891";
+  return policyBotId();
 }
 
 function sleep(ms: number) {
@@ -266,8 +269,5 @@ function excerptNearTitle(answer: string, title: string) {
 }
 
 export function isCozeBotConfigured() {
-  return Boolean(
-    (process.env.COZE_API_TOKEN || process.env.COZE_PAT) &&
-      (process.env.COZE_BOT_ID || "7700834694778617891")
-  );
+  return Boolean(cozeApiToken() && policyBotId());
 }

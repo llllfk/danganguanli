@@ -169,7 +169,15 @@ async function writeKeywordClassify(
  */
 const ARCHIVE_VISION_MAX_PAGES = Math.max(
   2,
-  Math.min(parseInt(process.env.COZE_ARCHIVE_VISION_PAGES || "3", 10) || 3, 8)
+  Math.min(
+    parseInt(
+      process.env.ARCHIVE_VISION_PAGES ||
+        process.env.COZE_ARCHIVE_VISION_PAGES ||
+        "3",
+      10
+    ) || 3,
+    8
+  )
 );
 
 function pickPagesForMeta<T extends { page_no: number }>(pages: T[]): T[] {
@@ -205,7 +213,7 @@ async function visionExtractOnePiece(
   );
   const { getObjectBytes } = await import("@/lib/storage");
   if (!isCozeVisionConfigured()) {
-    return { ok: false, error: "未配置 COZE_VISION_BOT_ID" };
+    return { ok: false, error: "未配置 VISION_BOT_ID" };
   }
 
   const page = await query<{
@@ -295,7 +303,7 @@ export async function extractPersonPiecesWithVision(
     return {
       skipped: true as const,
       reason:
-        "未配置 COZE_VISION_BOT_ID（需发布支持视觉理解的扣子智能体为 API）",
+        "未配置 VISION_BOT_ID（需发布支持视觉理解的扣子智能体为 API；自定义变量勿用 COZE_ 前缀）",
       extracted: 0,
       failed: 0,
       data: await listPieces(personCode),
@@ -409,7 +417,7 @@ export async function classifyPersonPiecesProgressive(
       ? undefined
       : opts.skipVision
         ? "已跳过视觉"
-        : "未配置 COZE_VISION_BOT_ID",
+        : "未配置 VISION_BOT_ID",
   });
 
   if (!total) {

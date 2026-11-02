@@ -148,7 +148,7 @@ export function KnowledgeBrowser() {
           <h2 className="text-lg font-bold">政策知识库原文</h2>
           <p className="text-xs text-[#7b8da0] mt-0.5">
             共 {docs.length} 份 · 仅支持上传 docx，同步到扣子知识库
-            {cozeConfigured ? "（已配置）" : "（未配置 COZE_DATASET_ID）"}
+            {cozeConfigured ? "（已配置）" : "（未配置 POLICY_DATASET_ID）"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

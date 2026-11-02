@@ -1,8 +1,14 @@
 /**
  * 扣子视觉：上传 JPG → 多模态对话 → 抽取材料题名 / 形成日期（末日期）
- * 需配置 COZE_VISION_BOT_ID（发布为 API 的视觉理解智能体）
+ * 扣子自定义环境变量请配 VISION_BOT_ID（不能用 COZE_ 前缀）
  */
 
+import {
+  cozeApiBase,
+  cozeApiToken,
+  isVisionConfigured,
+  visionBotId,
+} from "@/lib/coze-env";
 import {
   ARCHIVE_META_PROMPT,
   parseArchiveMetaJson,
@@ -10,27 +16,18 @@ import {
 } from "@/lib/vision-meta";
 
 export type { VisionExtractResult };
+export { visionBotId };
 
-const API = process.env.COZE_API_BASE || "https://api.coze.cn";
+const API = cozeApiBase();
 
 function token() {
-  const t = process.env.COZE_API_TOKEN || process.env.COZE_PAT;
-  if (!t) throw new Error("未配置 COZE_API_TOKEN");
+  const t = cozeApiToken();
+  if (!t) throw new Error("未配置 API_TOKEN（或本地 COZE_API_TOKEN）");
   return t;
 }
 
-export function visionBotId() {
-  return (
-    process.env.COZE_VISION_BOT_ID ||
-    process.env.COZE_ARCHIVE_BOT_ID ||
-    ""
-  );
-}
-
 export function isCozeVisionConfigured() {
-  return Boolean(
-    (process.env.COZE_API_TOKEN || process.env.COZE_PAT) && visionBotId()
-  );
+  return isVisionConfigured();
 }
 
 function sleep(ms: number) {
@@ -93,7 +90,7 @@ export async function extractMetaFromImages(
   const botId = visionBotId();
   if (!botId) {
     throw new Error(
-      "未配置 COZE_VISION_BOT_ID：请在扣子创建「视觉理解」智能体并发布为 API"
+      "未配置 VISION_BOT_ID：请在扣子创建「视觉理解」智能体并发布为 API（自定义变量勿用 COZE_ 前缀）"
     );
   }
   if (!images.length) return {};

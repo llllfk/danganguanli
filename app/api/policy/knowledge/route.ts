@@ -54,7 +54,10 @@ export async function POST(request: NextRequest) {
     }
     if (!isCozeKnowledgeConfigured()) {
       return NextResponse.json(
-        { error: "未配置 COZE_DATASET_ID / COZE_API_TOKEN，无法写入扣子知识库" },
+        {
+          error:
+            "未配置 POLICY_DATASET_ID / API_TOKEN，无法写入扣子知识库（自定义变量勿用 COZE_ 前缀）",
+        },
         { status: 400 }
       );
     }
