@@ -71,14 +71,14 @@ npm run dev
 智能整编上传的 JPG 写入对象存储，路径形如 `s3://{bucket}/archive/{人员代码}/{流水号}/{文件名}.jpg`。  
 查看原图走 `/api/archive/page-image`，从 S3 拉取。
 
-**扣子编程（官方自动注入，开通对象存储后）：**
+**扣子编程对象存储（官方文档）：**
 
-```env
-COZE_BUCKET_ENDPOINT_URL=
-COZE_BUCKET_NAME=
-```
-
-鉴权使用 workload identity 注入请求头 `x-storage-token`，无需 AK/SK。
+1. 在扣子编程为项目开通「对象存储」（对话或集成服务里添加）。
+2. 平台自动注入（无需手填）：
+   - `COZE_BUCKET_ENDPOINT_URL`
+   - `COZE_BUCKET_NAME`
+   - workload identity（`COZE_WORKLOAD_IDENTITY_*`）
+3. 代码侧：`access_key` / `secret_key` **留空**；用 `@coze/workload-identity` 取 token，请求头带 `x-storage-token`（与官方 Python SDK 一致）。
 
 **自建 / 兼容旧变量（本地或非扣子桶）：**
 
@@ -89,8 +89,8 @@ COZE_STORAGE_SK=
 COZE_STORAGE_BUCKET=
 ```
 
-- **本地开发**未配置存储时：上传落到 `data/uploads`（可写磁盘）。
-- **扣子 / ByteFaaS**：禁止写本地磁盘；读 `COZE_BUCKET_*`，未注入时直接报错（避免 `mkdir data/uploads` ENOENT）。
+- **本地开发**未配置存储时：上传落到 `data/uploads`。
+- **扣子**：禁止写本地磁盘；未开通对象存储会直接报错（避免 ENOENT）。
 
 种子附件仍可读 `public/archive`。
 

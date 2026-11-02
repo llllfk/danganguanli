@@ -5,15 +5,17 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { Client as CozeWorkloadClient } from "@coze/workload-identity";
 
 /**
- * 扣子编程对象存储（官方自动注入）：
- * - COZE_BUCKET_ENDPOINT_URL
- * - COZE_BUCKET_NAME
- * 鉴权走 workload identity → 请求头 x-storage-token（无需 AK/SK）
+ * 扣子对象存储接入（对齐官方文档）：
+ * - 环境变量自动注入：COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME
+ * - access_key / secret_key：留空即可（文档明确无需填写）
+ * - 鉴权：SDK 用 workload identity 取 token，请求头注入 x-storage-token
+ *   （业务侧不用手填 token；扣子运行时会注入 CLIENT_ID/SECRET/端点）
  *
- * 兼容旧名 / 自建 S3：
- * - COZE_STORAGE_URL / COZE_STORAGE_AK / COZE_STORAGE_SK / COZE_STORAGE_BUCKET
+ * 本地开发无桶时：落到 data/uploads
+ * 自建 S3：仍可用 COZE_STORAGE_URL + AK/SK/BUCKET
  */
 
 function firstEnv(...keys: string[]) {
@@ -35,7 +37,6 @@ function storageEnv() {
     "COZE_STORAGE_SK",
     "AWS_SECRET_ACCESS_KEY"
   );
-  /** 扣子桶模式：有官方 endpoint/bucket 注入，或运行在扣子环境 */
   const cozeBucketMode = Boolean(
     process.env.COZE_BUCKET_ENDPOINT_URL ||
       process.env.COZE_BUCKET_NAME ||
@@ -54,20 +55,19 @@ function storageEnv() {
 }
 
 let _client: S3Client | null = null;
-let _tokenCache: { token: string; expireAt: number } | null = null;
+let _resolvedEndpoint = "";
+let _resolvedBucket = "";
 
 export function hasStorage() {
   const e = storageEnv();
-  if (!e.endpoint || !e.bucket) return false;
-  // 扣子：endpoint + bucket 即可（x-storage-token）
-  if (e.cozeBucketMode) return true;
-  // 自建 S3：需要 AK/SK
-  return Boolean(e.accessKeyId && e.secretAccessKey);
+  if (e.endpoint && e.bucket) {
+    if (e.cozeBucketMode) return true;
+    return Boolean(e.accessKeyId && e.secretAccessKey);
+  }
+  // 扣子环境：端点可能仅在项目环境变量服务中，运行时再 resolve
+  return e.cozeBucketMode;
 }
 
-/**
- * 扣子 / ByteFaaS 运行时：只读工作区，禁止 mkdir data/uploads。
- */
 export function isCozeRuntime() {
   const flag = (process.env.COZE_RUNTIME || "").trim().toLowerCase();
   if (flag === "1" || flag === "true" || flag === "yes") return true;
@@ -79,7 +79,8 @@ export function isCozeRuntime() {
     process.env.BYTEFAAS_RUNTIME ||
     process.env.COZE_WORKSPACE_PATH ||
     process.env.COZE_BUCKET_ENDPOINT_URL ||
-    process.env.COZE_BUCKET_NAME
+    process.env.COZE_BUCKET_NAME ||
+    process.env.COZE_WORKLOAD_IDENTITY_CLIENT_ID
   ) {
     return true;
   }
@@ -91,12 +92,11 @@ export function isCozeRuntime() {
   return false;
 }
 
-/** 当前写存储后端：s3 | local */
 export function resolveWriteBackend(): "s3" | "local" {
   if (hasStorage()) return "s3";
   if (isCozeRuntime()) {
     throw new Error(
-      "当前为扣子运行环境，但未检测到对象存储注入（需 COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME）。请在扣子编程中为项目开通对象存储后重新部署。"
+      "当前为扣子运行环境，但未检测到对象存储。请在扣子编程为项目开通对象存储后重新部署（平台会注入 COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME）。"
     );
   }
   return "local";
@@ -107,110 +107,80 @@ export function localUploadRoot() {
 }
 
 export function getBucket() {
-  return storageEnv().bucket;
+  return _resolvedBucket || storageEnv().bucket;
 }
 
-/** 解析扣子 x-storage-token */
+/**
+ * 官方方式取 x-storage-token：
+ * @coze/workload-identity → Client.getAccessToken()
+ * 对应 Python：coze_workload_identity.Client().get_access_token()
+ */
 async function getCozeStorageToken(): Promise<string> {
-  const now = Date.now();
-  if (_tokenCache && _tokenCache.expireAt > now + 30_000) {
-    return _tokenCache.token;
+  const client = new CozeWorkloadClient();
+  try {
+    const token = await client.getAccessToken();
+    if (!token) {
+      throw new Error("workload identity 返回空 token");
+    }
+    return token;
+  } finally {
+    await client.close().catch(() => undefined);
   }
+}
 
-  const ready = firstEnv(
-    "COZE_WORKLOAD_IDENTITY_TOKEN",
-    "COZE_ACCESS_TOKEN",
-    "COZE_STORAGE_TOKEN"
-  );
-  if (ready) {
-    _tokenCache = { token: ready, expireAt: now + 10 * 60_000 };
-    return ready;
-  }
-
-  const clientId = firstEnv("COZE_WORKLOAD_IDENTITY_CLIENT_ID");
-  const clientSecret = firstEnv("COZE_WORKLOAD_IDENTITY_CLIENT_SECRET");
-  const idTokenEndpoint = firstEnv("COZE_WORKLOAD_IDENTITY_TOKEN_ENDPOINT");
-  const accessTokenEndpoint = firstEnv("COZE_WORKLOAD_ACCESS_TOKEN_ENDPOINT");
-
-  if (!clientId || !clientSecret || !idTokenEndpoint || !accessTokenEndpoint) {
-    return "";
+/** 端点/桶名：优先进程环境变量；缺失时按文档从项目环境变量服务补齐 */
+async function resolveCozeBucketConfig(): Promise<{
+  endpoint: string;
+  bucket: string;
+}> {
+  let endpoint = firstEnv("COZE_BUCKET_ENDPOINT_URL", "COZE_STORAGE_URL");
+  let bucket = firstEnv("COZE_BUCKET_NAME", "COZE_STORAGE_BUCKET");
+  if (endpoint && bucket) {
+    _resolvedEndpoint = endpoint;
+    _resolvedBucket = bucket;
+    return { endpoint, bucket };
   }
 
   try {
-    // 1) 取 ID Token
-    const idRes = await fetch(idTokenEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: "client_credentials",
-      }),
-    });
-    const idJson = (await idRes.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
-    const idToken =
-      (idJson.id_token as string) ||
-      (idJson.token as string) ||
-      (idJson.access_token as string) ||
-      "";
-    if (!idToken) {
-      console.warn("coze workload id token empty", idRes.status, idJson);
-      return "";
+    const client = new CozeWorkloadClient();
+    try {
+      const envVars = await client.getProjectEnvVars();
+      endpoint =
+        endpoint ||
+        envVars.get("COZE_BUCKET_ENDPOINT_URL") ||
+        envVars.get("COZE_STORAGE_URL") ||
+        "";
+      bucket =
+        bucket ||
+        envVars.get("COZE_BUCKET_NAME") ||
+        envVars.get("COZE_STORAGE_BUCKET") ||
+        "";
+    } finally {
+      await client.close().catch(() => undefined);
     }
-
-    // 2) 换 Access Token（用作 x-storage-token）
-    const atRes = await fetch(accessTokenEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: clientId,
-        client_secret: clientSecret,
-        id_token: idToken,
-        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-      }),
-    });
-    const atJson = (await atRes.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
-    const accessToken =
-      (atJson.access_token as string) ||
-      (atJson.token as string) ||
-      (atJson.data as { access_token?: string } | undefined)?.access_token ||
-      "";
-    if (!accessToken) {
-      console.warn("coze workload access token empty", atRes.status, atJson);
-      return "";
-    }
-
-    const expiresIn = Number(atJson.expires_in || 600);
-    _tokenCache = {
-      token: accessToken,
-      expireAt: now + Math.max(60, expiresIn - 30) * 1000,
-    };
-    return accessToken;
   } catch (e) {
-    console.warn("coze storage token fetch failed", e);
-    return "";
+    console.warn("resolve coze bucket via project env failed", e);
   }
+
+  if (!endpoint || !bucket) {
+    throw new Error(
+      "未配置存储端点/桶名：请确认项目已开通对象存储（COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME）。"
+    );
+  }
+  _resolvedEndpoint = endpoint;
+  _resolvedBucket = bucket;
+  return { endpoint, bucket };
 }
 
 export function getS3Client() {
-  if (!hasStorage()) {
-    throw new Error(
-      "未配置对象存储（扣子需 COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME；自建 S3 另需 COZE_STORAGE_AK/SK）"
-    );
-  }
+  const e = storageEnv();
   if (!_client) {
-    const e = storageEnv();
+    const endpoint = e.endpoint || _resolvedEndpoint || "https://placeholder";
     const client = new S3Client({
-      endpoint: e.endpoint,
+      endpoint,
       region: e.region,
       credentials: {
-        // 扣子忽略 AK/SK，用 x-storage-token；自建 S3 用真实密钥
+        // 文档：扣子无需 AK/SK，填占位即可；自建 S3 用真实密钥
         accessKeyId: e.accessKeyId || "coze",
         secretAccessKey: e.secretAccessKey || "coze",
       },
@@ -221,15 +191,11 @@ export function getS3Client() {
       client.middlewareStack.add(
         (next) => async (args) => {
           const token = await getCozeStorageToken();
-          if (token) {
-            const req = args.request as {
-              headers?: Record<string, string>;
-            };
-            req.headers = {
-              ...(req.headers || {}),
-              "x-storage-token": token,
-            };
-          }
+          const req = args.request as { headers?: Record<string, string> };
+          req.headers = {
+            ...(req.headers || {}),
+            "x-storage-token": token,
+          };
           return next(args);
         },
         {
@@ -245,7 +211,7 @@ export function getS3Client() {
   return _client;
 }
 
-/** 库内 file_path 约定：s3://{bucket}/{key}；本地为绝对路径 */
+/** 库内 file_path：s3://{bucket}/{key}；本地为绝对路径 */
 export function toS3Path(key: string) {
   return `s3://${getBucket()}/${key.replace(/^\/+/, "")}`;
 }
@@ -271,6 +237,15 @@ export async function putObject(params: {
   const backend = resolveWriteBackend();
 
   if (backend === "s3") {
+    const e = storageEnv();
+    if (e.cozeBucketMode) {
+      await resolveCozeBucketConfig();
+      // endpoint 可能是运行时才解析到的，重建 client
+      _client = null;
+    } else if (!e.endpoint || !e.bucket) {
+      throw new Error("未配置对象存储端点或桶名");
+    }
+
     const client = getS3Client();
     const bucket = getBucket();
     await client.send(
@@ -293,7 +268,11 @@ export async function putObject(params: {
 export async function getObjectBytes(filePathOrKey: string): Promise<Buffer> {
   const parsed = parseS3Path(filePathOrKey);
   if (parsed) {
-    if (!hasStorage()) {
+    const e = storageEnv();
+    if (e.cozeBucketMode) {
+      await resolveCozeBucketConfig();
+      _client = null;
+    } else if (!hasStorage()) {
       throw new Error("文件在对象存储中，但当前环境未注入存储凭证");
     }
     const client = getS3Client();
@@ -331,25 +310,31 @@ export function auditObjectKey(
   return `audit/${personCode}/${formalNo}/${fileName}`.replace(/\\/g, "/");
 }
 
-/** 诊断用：不回传密钥 */
 export function storageDiagnostics() {
   const e = storageEnv();
   return {
     hasStorage: hasStorage(),
     cozeRuntime: isCozeRuntime(),
     cozeBucketMode: e.cozeBucketMode,
-    hasEndpoint: Boolean(e.endpoint),
-    hasBucket: Boolean(e.bucket),
+    hasEndpoint: Boolean(e.endpoint || _resolvedEndpoint),
+    hasBucket: Boolean(e.bucket || _resolvedBucket),
     hasAkSk: Boolean(e.accessKeyId && e.secretAccessKey),
+    hasWorkloadIdentity: Boolean(
+      process.env.COZE_WORKLOAD_IDENTITY_CLIENT_ID
+    ),
     endpointSource: process.env.COZE_BUCKET_ENDPOINT_URL
       ? "COZE_BUCKET_ENDPOINT_URL"
       : process.env.COZE_STORAGE_URL
         ? "COZE_STORAGE_URL"
-        : "",
+        : _resolvedEndpoint
+          ? "project_env"
+          : "",
     bucketSource: process.env.COZE_BUCKET_NAME
       ? "COZE_BUCKET_NAME"
       : process.env.COZE_STORAGE_BUCKET
         ? "COZE_STORAGE_BUCKET"
-        : "",
+        : _resolvedBucket
+          ? "project_env"
+          : "",
   };
 }
