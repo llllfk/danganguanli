@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import { getSortedGroups, sortPersonPieces } from "@/lib/repos/archive";
+import { getSortedGroups } from "@/lib/repos/archive";
 import { buildCatalogWorkbook } from "@/lib/repos/catalog-export";
 import { query } from "@/lib/db";
 
@@ -12,12 +12,12 @@ export async function POST(request: NextRequest) {
       personName?: string;
     };
     const personCode = body.personCode || "00001";
-    let sorted = await getSortedGroups(personCode);
+    const sorted = await getSortedGroups(personCode);
     if (!sorted.length) {
-      sorted = await sortPersonPieces(personCode);
-    }
-    if (!sorted.length) {
-      return NextResponse.json({ error: "暂无排序结果可导出" }, { status: 400 });
+      return NextResponse.json(
+        { error: "请先完成智能分类与智能排序后再导出目录" },
+        { status: 400 }
+      );
     }
 
     let personName = body.personName;

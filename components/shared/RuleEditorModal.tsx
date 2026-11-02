@@ -9,6 +9,7 @@ type Props = {
   open: boolean;
   title: string;
   value: string;
+  hint?: string;
   onClose: () => void;
   onSave: (next: string) => Promise<void> | void;
 };
@@ -17,6 +18,7 @@ export function RuleEditorModal({
   open,
   title,
   value,
+  hint = "修改后写入数据库规则表，业务引擎按对应规则执行。",
   onClose,
   onSave,
 }: Props) {
@@ -59,7 +61,7 @@ export function RuleEditorModal({
         value={text}
         onChange={(e) => setText(e.target.value)}
         areaClassName="!min-h-[360px]"
-        hint="修改后写入数据库规则表，业务引擎按对应规则执行。"
+        hint={hint}
       />
     </Modal>
   );

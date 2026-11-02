@@ -27,11 +27,11 @@ export function ChartCard({
 }) {
   return (
     <div
-      className={`rounded-xl border border-[#d4e3f5] bg-white p-4 min-h-[280px] flex flex-col ${className}`}
+      className={`rounded-xl border border-[#d4e3f5] bg-white p-4 min-h-[300px] flex flex-col overflow-visible ${className}`}
     >
       <PanelTitle>{title}</PanelTitle>
       <div className="h-px bg-[#9AA7B4]/30 mb-3" />
-      <div className="flex-1 min-h-0">{children}</div>
+      <div className="flex-1 min-h-[220px] overflow-visible">{children}</div>
     </div>
   );
 }
@@ -182,52 +182,142 @@ export function EduDonutChart({
   );
 }
 
-/** 专业结构：竖柱（柱与标签同列，默认不出现多余滚动条） */
+/** 专业结构：柱顶数值 + 柱下竖排类名，避免斜标签交叉 */
 export function MajorBarChart({ data }: { data: MajorItem[] }) {
   if (!data.length) return <EmptyChart />;
   const max = Math.max(...data.map((d) => d.count), 1);
+  const mid = Math.round(max / 2);
+  const n = data.length;
+  const maxChars = Math.max(...data.map((d) => d.label.length), 1);
+
+  const W = 580;
+  const padL = 36;
+  const padR = 12;
+  const padT = 22;
+  const plotH = 140;
+  const charH = 12;
+  const labelBand = maxChars * charH + 6;
+  const H = padT + plotH + 6 + labelBand;
+  const plotW = W - padL - padR;
+  const baseY = padT + plotH;
+  const barSlot = plotW / n;
+  const barW = Math.min(16, barSlot * 0.42);
+
+  const yAt = (v: number) => padT + plotH * (1 - v / max);
+
   return (
-    <div className="h-full min-h-[220px] overflow-hidden">
-      <div className="flex items-stretch gap-0.5 border-b border-l border-[#6BA8E5]/65 px-0.5 h-[210px] w-full">
-        {data.map((d) => (
-          <div
-            key={d.label}
-            className="flex flex-col items-center flex-1 min-w-0 h-full"
-          >
-            <div className="flex-1 w-full flex flex-col items-center justify-end pb-1 min-h-0">
-              <span className="text-[10px] text-[#9FB6CF] mb-0.5 tabular-nums">
-                {d.count}
-              </span>
-              <div
-                className="w-[58%] max-w-[22px] rounded-t-sm bg-gradient-to-b from-[#6BA8E5]/90 to-[#6BA8E5]/10"
-                style={{ height: `${Math.max((d.count / max) * 100, 4)}%` }}
-              />
-            </div>
-            <div className="h-[52px] shrink-0 w-full relative overflow-hidden">
-              <span
-                className="absolute left-1/2 top-1 text-[9px] text-[#A8BFD6] whitespace-nowrap"
-                style={{
-                  transform: "translateX(-20%) rotate(-32deg)",
-                  transformOrigin: "top left",
-                }}
-                title={d.label}
+    <div className="h-full min-h-[280px] w-full">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full h-full max-h-[300px]"
+        role="img"
+        aria-label="专业结构"
+      >
+        {[max, mid, 0].map((v) => {
+          const y = yAt(v);
+          return (
+            <g key={`tick-${v}`}>
+              {v > 0 ? (
+                <line
+                  x1={padL}
+                  y1={y}
+                  x2={W - padR}
+                  y2={y}
+                  stroke="#d5e3f2"
+                  strokeWidth="1"
+                  strokeDasharray="4 3"
+                />
+              ) : null}
+              <text
+                x={padL - 6}
+                y={y + 3}
+                textAnchor="end"
+                fill="#8aa0b8"
+                fontSize="11"
               >
-                {d.label}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
+                {v}
+              </text>
+            </g>
+          );
+        })}
+
+        <line
+          x1={padL}
+          y1={padT}
+          x2={padL}
+          y2={baseY}
+          stroke="#6BA8E5"
+          strokeOpacity="0.65"
+          strokeWidth="1"
+        />
+        <line
+          x1={padL}
+          y1={baseY}
+          x2={W - padR}
+          y2={baseY}
+          stroke="#6BA8E5"
+          strokeOpacity="0.65"
+          strokeWidth="1"
+        />
+
+        <defs>
+          <linearGradient id="major-bar-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#6BA8E5" stopOpacity="0.95" />
+            <stop offset="100%" stopColor="#6BA8E5" stopOpacity="0.25" />
+          </linearGradient>
+        </defs>
+
+        {data.map((d, i) => {
+          const cx = padL + barSlot * (i + 0.5);
+          const barH = Math.max((d.count / max) * (plotH - 4), 3);
+          const top = baseY - barH;
+          const x = cx - barW / 2;
+          const chars = Array.from(d.label);
+          return (
+            <g key={d.label}>
+              <rect
+                x={x}
+                y={top}
+                width={barW}
+                height={barH}
+                rx={2}
+                fill="url(#major-bar-fill)"
+              />
+              <text
+                x={cx}
+                y={top - 5}
+                textAnchor="middle"
+                fill="#7f96b0"
+                fontSize="10"
+              >
+                {d.count}
+              </text>
+              {chars.map((ch, ci) => (
+                <text
+                  key={`${d.label}-${ci}`}
+                  x={cx}
+                  y={baseY + 14 + ci * charH}
+                  textAnchor="middle"
+                  fill="#8aa0b8"
+                  fontSize="10"
+                >
+                  {ch}
+                </text>
+              ))}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }
 
 const TREND_Y: Record<string, number> = {
-  优秀: 12,
-  称职: 42,
-  合格: 72,
-  不合格: 92,
-  待归档: 12,
+  优秀: 18,
+  称职: 48,
+  合格: 78,
+  不合格: 108,
+  待归档: 18,
 };
 
 export function AssessmentTrend({
@@ -236,8 +326,9 @@ export function AssessmentTrend({
   points: { year: string; level: keyof typeof TREND_Y | string }[];
 }) {
   const w = 320;
-  const h = 140;
-  const padX = 40;
+  const h = 150;
+  const padX = 48;
+  const padBottom = 22;
   const step = points.length > 1 ? (w - padX * 2) / (points.length - 1) : 0;
   const coords = points.map((p, i) => ({
     x: padX + i * step,
@@ -249,22 +340,22 @@ export function AssessmentTrend({
   const lastSolid = solid[solid.length - 1];
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[160px]" role="img">
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[168px]" role="img">
       {["优秀", "称职", "合格", "不合格"].map((lab, i) => {
-        const y = [12, 42, 72, 92][i];
+        const y = [18, 48, 78, 108][i];
         return (
           <g key={lab}>
             <line
               x1={padX}
               y1={y}
-              x2={w - 16}
+              x2={w - 12}
               y2={y}
               stroke="#eef2f6"
               strokeWidth="1"
             />
             <text
-              x={padX - 6}
-              y={y + 4}
+              x={padX - 8}
+              y={y + 3}
               textAnchor="end"
               fill="#64748b"
               fontSize="10"
@@ -299,22 +390,30 @@ export function AssessmentTrend({
             cx={c.x}
             cy={c.y}
             r="5"
-            fill={c.level === "待归档" ? "none" : c.level === "优秀" ? "#1f9d57" : "#5b9bd5"}
+            fill={
+              c.level === "待归档"
+                ? "none"
+                : c.level === "优秀"
+                  ? "#1f9d57"
+                  : "#5b9bd5"
+            }
             stroke={c.level === "待归档" ? "#9aa7b4" : "none"}
             strokeWidth="2"
           />
+          {c.level !== "待归档" ? (
+            <text
+              x={c.x}
+              y={c.y - 10}
+              textAnchor="middle"
+              fill="#33445C"
+              fontSize="10"
+            >
+              {c.level}
+            </text>
+          ) : null}
           <text
             x={c.x}
-            y={c.y - 10}
-            textAnchor="middle"
-            fill={c.level === "待归档" ? "#8a9bb0" : "#33445C"}
-            fontSize="10"
-          >
-            {c.level}
-          </text>
-          <text
-            x={c.x}
-            y={h - 6}
+            y={h - padBottom + 16}
             textAnchor="middle"
             fill="#475569"
             fontSize="10"

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { RuleEditorModal } from "@/components/shared/RuleEditorModal";
+import { collectDroppedFiles } from "@/lib/collect-dropped-files";
 import type { AuditFieldResult, AuditReport } from "@/types";
 
 type Cat = { code: string; name: string };
@@ -66,7 +67,7 @@ export function AuditClient() {
   }, []);
 
   function showStub(label: string) {
-    setStubMsg(`${label}：对接预留，暂无实际功能`);
+    setStubMsg(`${label}：对接预留`);
     window.setTimeout(() => setStubMsg(""), 2500);
   }
 
@@ -139,7 +140,12 @@ export function AuditClient() {
         /* ignore */
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "上传失败");
+      let msg = e instanceof Error ? e.message : "上传失败";
+      if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) {
+        msg =
+          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP / 分批上传；扣子环境请确认已注入 COZE_STORAGE_* 对象存储。";
+      }
+      setError(msg);
       setTip("");
     } finally {
       setBusy("");
@@ -452,7 +458,20 @@ export function AuditClient() {
               onDrop={(e) => {
                 e.preventDefault();
                 setDragOver(false);
-                if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files);
+                void (async () => {
+                  try {
+                    const files = await collectDroppedFiles(e.dataTransfer);
+                    if (files.length) await uploadFiles(files);
+                    else
+                      setError(
+                        "未识别到可上传文件，请拖入有序档案文件夹、JPG 或 ZIP（命名：00001-0401-001-001.jpg）"
+                      );
+                  } catch (err) {
+                    setError(
+                      err instanceof Error ? err.message : "拖拽解析失败"
+                    );
+                  }
+                })();
               }}
             >
               <p className="text-[14px] text-[#334155]">
@@ -460,10 +479,10 @@ export function AuditClient() {
                   ? "上传中…"
                   : loaded
                     ? `当前人员 ${personCode} · 可重新上传`
-                    : "或上传整人有序档案文件夹 / JPG / ZIP"}
+                    : "或拖拽 / 选择有序档案文件夹、JPG、ZIP"}
               </p>
               <p className="text-[11px] text-[#7b8da0] mt-1">
-                命名：人员代码-分类号-件号-页号.jpg
+                命名：人员代码-分类号-件号-页号.jpg（如 00001-0401-001-001.jpg）
               </p>
               <div className="mt-2 flex justify-center gap-2">
                 <button
@@ -623,12 +642,14 @@ export function AuditClient() {
             {/* 信息比对 */}
             <div className="flex flex-col min-h-0 border-r border-[#e4ebf3]">
               <div className="px-4 py-2.5 border-b border-[#e4ebf3] bg-[#f7fbff]">
-                <h4 className="text-[15px] font-semibold text-[#1a4b7a]">信息比对</h4>
+                <h4 className="text-[15px] font-semibold text-[#1a4b7a]">
+                  材料信息比对
+                </h4>
               </div>
               <div className="flex-1 min-h-0 overflow-auto px-3 py-3">
                 {!report ? (
                   <p className="text-sm text-[#7b8da0] leading-7 px-1">
-                    点击左侧「开始检验」后，将按附件7做三龄两历等交叉比对，结果展示于此。
+                    请点击左侧「开始检验」
                   </p>
                 ) : (
                   <div className="space-y-2 anim-fade-up">
@@ -729,7 +750,7 @@ export function AuditClient() {
               <div className="flex-1 min-h-0 overflow-auto px-3 py-3">
                 {!report ? (
                   <p className="text-sm text-[#7b8da0] leading-7 px-1">
-                    检验完成后，按附件8列出缺失的必要材料。
+                    请点击左侧「开始检验」
                   </p>
                 ) : report.completeness.length === 0 ? (
                   <p className="text-sm text-emerald-600">未发现必要材料缺失</p>
@@ -886,6 +907,7 @@ export function AuditClient() {
         open={ruleOpen}
         title="审核查验规则（数据库 · 附件7/8）"
         value={`${auditRule}\n\n——完整性——\n${compRule}`}
+        hint="此处保存规则说明文案。比对逻辑与完整性筛查仍按系统内置字段规则 / completeness_requirements 表执行；改文案不会立刻改变检验结果，需重新「开始检验」。"
         onClose={() => setRuleOpen(false)}
         onSave={async (next) => {
           const [a, c] = next.split("——完整性——");
@@ -901,7 +923,7 @@ export function AuditClient() {
           setAuditRule(j.data.audit);
           setCompRule(j.data.completeness);
           setTip(
-            "规则文本已保存到 business_rules；完整性条目仍按 completeness_requirements 表执行"
+            "规则文案已保存；比对/完整性仍按内置引擎与 completeness_requirements，请重新「开始检验」"
           );
         }}
       />

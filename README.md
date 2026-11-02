@@ -80,7 +80,10 @@ COZE_STORAGE_SK=
 COZE_STORAGE_BUCKET=
 ```
 
-未配置时上传落到本地 `data/uploads`；种子附件仍可读 `public/archive`。
+- **本地开发**未配置上述变量时：上传落到 `data/uploads`（可写磁盘）。
+- **扣子 / ByteFaaS** 环境：禁止写本地磁盘，必须注入对象存储；未配置会直接报错提示，而不会再尝试 `mkdir data/uploads`（避免 ENOENT）。
+
+种子附件仍可读 `public/archive`。
 
 ## Coze 部署
 

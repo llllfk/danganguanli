@@ -10,6 +10,7 @@ import {
   archiveObjectKey,
   hasStorage,
   putObject,
+  resolveWriteBackend,
 } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -38,7 +39,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "未登录" }, { status: 401 });
     }
 
-    // 本地未配 COZE_STORAGE_* 时 putObject 会落到 data/uploads；扣子环境仍走对象存储
+    // 本地 → data/uploads；扣子 → 必须 S3（未配置时提前清晰报错，避免 ENOENT）
+    const storageBackend = resolveWriteBackend();
     const form = await request.formData();
     let rawFiles: RawFile[] = [];
 
@@ -142,12 +144,13 @@ export async function POST(request: NextRequest) {
       personCode,
       personCodes: result.personCodes,
       stats: { pieces: data.length, pages: pageTotal },
-      storage: hasStorage() ? "s3" : "local",
+      storage: storageBackend,
+      hasStorage: hasStorage(),
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "上传失败" },
-      { status: 500 }
-    );
+    const msg = e instanceof Error ? e.message : "上传失败";
+    const status =
+      /对象存储|扣子运行环境|COZE_STORAGE/i.test(msg) ? 503 : 500;
+    return NextResponse.json({ error: msg }, { status });
   }
 }

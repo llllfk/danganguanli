@@ -86,16 +86,15 @@ export const talentPortraitWang = {
   ],
   promotion: [
     { date: "2025-07", label: "助理工程师（初级）" },
-    { date: "2029-07", label: "中级（待晋升）", pending: true },
+    { date: "2029-07", label: "中级（预测）", pending: true },
   ],
   assessments: [
-    { year: "2026", result: "-", note: "年度考核材料未归档" },
+    { year: "2026", result: "", note: "年度考核材料未归档" },
     { year: "2025", result: "优秀", note: "年度考核" },
-    { year: "2024", result: "优秀", note: "年度考核" },
+    { year: "2024", result: "称职", note: "年度考核" },
   ],
   trend: [
-    { year: "2023", level: "称职" },
-    { year: "2024", level: "优秀" },
+    { year: "2024", level: "称职" },
     { year: "2025", level: "优秀" },
     { year: "2026", level: "待归档" },
   ],
@@ -104,11 +103,6 @@ export const talentPortraitWang = {
       year: "2025",
       title: "先进个人",
       source: "来源：2025年度XX公司先进个人审批表",
-    },
-    {
-      year: "2024",
-      title: "先进个人",
-      source: "来源：2024年度XX公司先进个人审批表",
     },
   ],
 };

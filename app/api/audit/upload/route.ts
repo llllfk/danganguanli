@@ -11,7 +11,12 @@ import {
 } from "@/lib/repos/audit-upload";
 import { getPersonMaterials } from "@/lib/repos/audit";
 import { listCategories } from "@/lib/repos/archive";
-import { auditObjectKey, hasStorage, putObject } from "@/lib/storage";
+import {
+  auditObjectKey,
+  hasStorage,
+  putObject,
+  resolveWriteBackend,
+} from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -40,6 +45,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "未登录" }, { status: 401 });
     }
 
+    const storageBackend = resolveWriteBackend();
     const form = await request.formData();
     const clearFirst = String(form.get("clearFirst") || "1") !== "0";
     const sortStart = parseInt(String(form.get("sortStart") || "0"), 10) || 0;
@@ -159,16 +165,17 @@ export async function POST(request: NextRequest) {
         pageCount: materials.reduce((s, m) => s + (m.pageCount || 0), 0),
         batchPages: inputs.reduce((s, p) => s + p.pages.length, 0),
         sortEnd: sortStart + inputs.length,
-        storage: hasStorage() ? "s3" : "local",
+        storage: storageBackend,
+        hasStorage: hasStorage(),
         materials,
         categories,
       },
     });
   } catch (e) {
     console.error("audit upload failed", e);
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "上传失败" },
-      { status: 500 }
-    );
+    const msg = e instanceof Error ? e.message : "上传失败";
+    const status =
+      /对象存储|扣子运行环境|COZE_STORAGE/i.test(msg) ? 503 : 500;
+    return NextResponse.json({ error: msg }, { status });
   }
 }

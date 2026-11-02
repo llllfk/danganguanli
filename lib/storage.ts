@@ -25,6 +25,42 @@ export function hasStorage() {
   return Boolean(e.endpoint && e.accessKeyId && e.secretAccessKey && e.bucket);
 }
 
+/**
+ * 扣子 / ByteFaaS 运行时：只读工作区，禁止 mkdir data/uploads。
+ * 可通过 COZE_RUNTIME=1 强制；或根据 cwd / BYTEFAAS_* 自动识别。
+ */
+export function isCozeRuntime() {
+  const flag = (process.env.COZE_RUNTIME || "").trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes") return true;
+  if (flag === "0" || flag === "false" || flag === "no") return false;
+
+  if (
+    process.env.BYTEFAAS_POD_NAME ||
+    process.env.BYTEFAAS_FUNC_NAME ||
+    process.env.BYTEFAAS_RUNTIME ||
+    process.env.COZE_WORKSPACE_PATH
+  ) {
+    return true;
+  }
+
+  const cwd = process.cwd().replace(/\\/g, "/");
+  if (cwd.includes("/opt/bytefaas") || cwd.startsWith("/var/task")) {
+    return true;
+  }
+  return false;
+}
+
+/** 当前写存储后端：s3 | local；扣子未配 S3 时直接抛错 */
+export function resolveWriteBackend(): "s3" | "local" {
+  if (hasStorage()) return "s3";
+  if (isCozeRuntime()) {
+    throw new Error(
+      "当前为扣子运行环境，本地磁盘不可写。请在应用环境变量中配置 COZE_STORAGE_URL / COZE_STORAGE_AK / COZE_STORAGE_SK / COZE_STORAGE_BUCKET（扣子编程通常自动注入对象存储）。"
+    );
+  }
+  return "local";
+}
+
 /** 本地上传根目录（相对项目） */
 export function localUploadRoot() {
   return path.join(process.cwd(), "data", "uploads");
@@ -76,8 +112,9 @@ export async function putObject(params: {
   contentType?: string;
 }) {
   const key = params.key.replace(/^\/+/, "").replace(/\\/g, "/");
+  const backend = resolveWriteBackend();
 
-  if (hasStorage()) {
+  if (backend === "s3") {
     const client = getS3Client();
     const bucket = getBucket();
     await client.send(

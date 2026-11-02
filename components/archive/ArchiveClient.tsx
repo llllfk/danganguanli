@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { RuleEditorModal } from "@/components/shared/RuleEditorModal";
 import { CATEGORY_SHORT, categoryTagColor } from "@/lib/archive-parse";
+import { collectDroppedFiles } from "@/lib/collect-dropped-files";
 import type { ArchiveCategoryCode, ArchivePiece, SortItem } from "@/types";
 
 type Cat = { code: ArchiveCategoryCode; name: string; parent?: string };
@@ -85,7 +86,7 @@ export function ArchiveClient() {
   );
 
   function showStub(label: string) {
-    setStubMsg(`${label}：对接预留，暂无实际功能`);
+    setStubMsg(`${label}：对接预留`);
     window.setTimeout(() => setStubMsg(""), 2500);
   }
 
@@ -140,7 +141,12 @@ export function ArchiveClient() {
         `已读取 ${lastStats.pieces || lastData.length} 件 · ${lastStats.pages || 0} 页（人员 ${code}）`
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "上传失败");
+      let msg = e instanceof Error ? e.message : "上传失败";
+      if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) {
+        msg =
+          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP / 分批上传；扣子环境请确认已注入 COZE_STORAGE_* 对象存储。";
+      }
+      setError(msg);
     } finally {
       setBusy("");
     }
@@ -302,6 +308,10 @@ export function ArchiveClient() {
   }
 
   async function onExport() {
+    if (!sorted?.length) {
+      setError("请先完成智能分类与智能排序后再导出目录");
+      return;
+    }
     setBusy("export");
     setError("");
     try {
@@ -391,14 +401,24 @@ export function ArchiveClient() {
               onDrop={(e) => {
                 e.preventDefault();
                 setDragOver(false);
-                if (e.dataTransfer.files?.length) uploadFiles(e.dataTransfer.files);
+                void (async () => {
+                  try {
+                    const files = await collectDroppedFiles(e.dataTransfer);
+                    if (files.length) await uploadFiles(files);
+                    else setError("未识别到可上传文件，请拖入文件夹、JPG 或 ZIP");
+                  } catch (err) {
+                    setError(
+                      err instanceof Error ? err.message : "拖拽解析失败"
+                    );
+                  }
+                })();
               }}
             >
               <div className="text-[#4a9eff] text-2xl mb-2">⬆</div>
               <p className="text-[15px] text-[#334155]">
                 {busy === "upload"
                   ? "上传解析中..."
-                  : "点击或拖拽上传 JPG 文件"}
+                  : "点击或拖拽上传 JPG / 文件夹 / ZIP"}
               </p>
               <p className="text-xs text-[#7b8da0] mt-2">
                 支持件文件夹 / 散页 JPG / ZIP · 命名如 00001-L001-001.jpg
@@ -704,7 +724,12 @@ export function ArchiveClient() {
             </button>
             <button
               type="button"
-              disabled={!!busy}
+              disabled={!!busy || !sorted?.length}
+              title={
+                sorted?.length
+                  ? "导出制式人事档案目录"
+                  : "请先完成智能分类与智能排序"
+              }
               onClick={onExport}
               className="h-12 px-5 rounded-[10px] border-2 border-[#4a9eff] bg-white text-[#2f6fc0] font-semibold disabled:opacity-50"
             >
@@ -764,6 +789,7 @@ export function ArchiveClient() {
         open={ruleModal === "classify"}
         title="分类规则"
         value={classifyRule}
+        hint="此处保存规则说明文案。当前分类仍按系统内置关键词与视觉识别执行；改文案不会立刻改变结果，需重新点击「开始分类」。"
         onClose={() => setRuleModal(null)}
         onSave={async (next) => {
           const res = await fetch("/api/archive/rules", {
@@ -773,13 +799,14 @@ export function ArchiveClient() {
           });
           const j = await res.json();
           setClassifyRule(j.data.classify);
-          setTip("分类规则已保存");
+          setTip("分类规则文案已保存（引擎仍按内置逻辑；请重新「开始分类」）");
         }}
       />
       <RuleEditorModal
         open={ruleModal === "sort"}
         title="排序规则"
         value={sortRule}
+        hint="此处保存规则说明文案。当前排序仍按系统内置类目与件号规则执行；改文案不会立刻改变结果，需重新点击「开始排序」。"
         onClose={() => setRuleModal(null)}
         onSave={async (next) => {
           const res = await fetch("/api/archive/rules", {
@@ -789,7 +816,7 @@ export function ArchiveClient() {
           });
           const j = await res.json();
           setSortRule(j.data.sort);
-          setTip("排序规则已保存；重新「开始排序」生效");
+          setTip("排序规则文案已保存；重新「开始排序」按内置引擎生效");
         }}
       />
     </div>

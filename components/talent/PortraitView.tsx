@@ -207,13 +207,15 @@ export function PortraitView() {
                     <tr key={a.year} className="border-b border-[#e9f0f7]">
                       <td className="px-3 py-2.5">{a.year} 年度</td>
                       <td
-                        className={`px-3 py-2.5 text-center ${
+                        className={`px-3 py-2.5 text-center font-medium ${
                           a.result === "优秀"
-                            ? "text-[#1f9d57] font-medium"
-                            : "text-[#94a3b8]"
+                            ? "text-[#1f9d57]"
+                            : a.result === "称职"
+                              ? "text-[#3b82c4]"
+                              : "text-[#94a3b8]"
                         }`}
                       >
-                        {a.result}
+                        {a.result || "—"}
                       </td>
                       <td className="px-3 py-2.5 text-[#94a3b8]">{a.note}</td>
                     </tr>
