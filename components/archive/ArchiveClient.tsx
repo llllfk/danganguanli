@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
+import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { RuleEditorModal } from "@/components/shared/RuleEditorModal";
 import { CATEGORY_SHORT, categoryTagColor } from "@/lib/archive-parse";
 import { collectDroppedFiles } from "@/lib/collect-dropped-files";
@@ -41,6 +42,7 @@ export function ArchiveClient() {
   } | null>(null);
   const [presetQuery, setPresetQuery] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -307,6 +309,36 @@ export function ArchiveClient() {
     }
   }
 
+  async function onClearPerson() {
+    if (!personCode) return;
+    setBusy("clear");
+    setError("");
+    try {
+      const res = await fetch("/api/archive/clear-person", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personCode }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.error) {
+        throw new Error(json.error || `清空失败（HTTP ${res.status}）`);
+      }
+      setPieces([]);
+      setSorted(null);
+      setClassifyProgress(null);
+      setClearOpen(false);
+      const name = json.data?.personName || personCode;
+      const total = json.data?.total ?? 0;
+      setTip(
+        `已清空 ${name}（${personCode}）业务数据 ${total} 条；可重新上传测试（人员主档保留）`
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "清空失败");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function onExport() {
     if (!sorted?.length) {
       setError("请先完成智能分类与智能排序后再导出目录");
@@ -476,6 +508,29 @@ export function ArchiveClient() {
             >
               系统读取
             </button>
+
+            <div className="rounded-xl border border-[#e4ebf3] bg-[#f7fafd] px-3 py-2.5 flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-[12px] text-[#7b8da0]">当前人员</div>
+                <div className="text-[14px] font-semibold text-[#1f2937] truncate">
+                  {personCode}
+                  {pieces.length > 0 ? (
+                    <span className="ml-1.5 font-normal text-[#7b8da0]">
+                      · {pieces.length} 件 / {pageTotal} 页
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={!!busy || !personCode}
+                title="清空该人员整编/审核等相关数据，便于反复测试"
+                onClick={() => setClearOpen(true)}
+                className="shrink-0 h-9 px-3 rounded-lg border border-rose-200 bg-white text-[12px] font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+              >
+                {busy === "clear" ? "清空中…" : "清空全部"}
+              </button>
+            </div>
 
             <div className="text-[15px] font-semibold text-[#334155]">
               已读取文件（{pieces.length} 件 · {pageTotal} 页）
@@ -818,6 +873,19 @@ export function ArchiveClient() {
           setSortRule(j.data.sort);
           setTip("排序规则文案已保存；重新「开始排序」按内置引擎生效");
         }}
+      />
+
+      <ConfirmModal
+        open={clearOpen}
+        title="清空当前人员数据"
+        danger
+        busy={busy === "clear"}
+        confirmText="确认清空"
+        message={`将删除人员 ${personCode} 的整编件、有序件、审核出处/记录、页文本缓存等业务数据（保留人员主档）。对象存储中的历史文件不会删除。确认后可重新上传测试。`}
+        onClose={() => {
+          if (busy !== "clear") setClearOpen(false);
+        }}
+        onConfirm={onClearPerson}
       />
     </div>
   );
