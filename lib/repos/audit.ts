@@ -1,4 +1,8 @@
 import { query } from "@/lib/db";
+import {
+  guessTitleFromRaw,
+  looksLikePlaceholderName,
+} from "@/lib/vision-meta";
 import type {
   AuditFieldResult,
   AuditReport,
@@ -53,13 +57,66 @@ export async function listPersons() {
 export type PersonMaterial = {
   category: string;
   materialName: string;
+  imageNames: string[];
   serialNo: string;
   pageCount: number;
   formalNo: string | null;
   source: "ordered" | "unordered";
 };
 
-/** 审核数据源：优先附件6 有序件；无则回退乱序件（整编结果） */
+/** 审核数据源：优先附件6 有序件；无则回退乱序件。占位名从页摘要/出处兜题名。 */
+async function resolveDisplayTitles(
+  personCode: string,
+  refs: string[]
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (!refs.length) return map;
+  const pages = await query<{
+    piece_ref: string;
+    material_name: string | null;
+    text_content: string | null;
+  }>(
+    `SELECT piece_ref, material_name, text_content
+     FROM archive_page_texts
+     WHERE person_code = $1 AND piece_ref = ANY($2::text[])
+     ORDER BY piece_ref, page_no`,
+    [personCode, refs]
+  );
+  for (const row of pages.rows) {
+    if (map.has(row.piece_ref)) continue;
+    const cached = (row.material_name || "").trim();
+    if (cached && !looksLikePlaceholderName(cached, row.piece_ref)) {
+      map.set(row.piece_ref, cached);
+      continue;
+    }
+    const guessed = guessTitleFromRaw(row.text_content || "");
+    if (guessed && !looksLikePlaceholderName(guessed, row.piece_ref)) {
+      map.set(row.piece_ref, guessed);
+    }
+  }
+  const missing = refs.filter((r) => !map.has(r));
+  if (missing.length) {
+    const src = await query<{ material_no: string; material_name: string }>(
+      `SELECT DISTINCT ON (material_no) material_no, material_name
+       FROM audit_field_sources
+       WHERE person_code = $1
+         AND material_no = ANY($2::text[])
+         AND nullif(trim(material_name), '') IS NOT NULL
+         AND material_name !~ '^档案材料'
+         AND material_name !~ '^[0-9]{4,}-'
+       ORDER BY material_no, id DESC`,
+      [personCode, missing]
+    );
+    for (const row of src.rows) {
+      const t = (row.material_name || "").trim();
+      if (t && !looksLikePlaceholderName(t, row.material_no)) {
+        map.set(row.material_no, t);
+      }
+    }
+  }
+  return map;
+}
+
 export async function getPersonMaterials(
   personCode: string
 ): Promise<PersonMaterial[]> {
@@ -68,23 +125,39 @@ export async function getPersonMaterials(
     material_name: string;
     formal_no: string;
     page_count: number;
+    image_names: string[];
   }>(
-    `SELECT category_code, material_name, formal_no, page_count
-     FROM ordered_archive_pieces
+    `SELECT category_code, material_name, formal_no, page_count,
+            ARRAY(SELECT pg.file_name FROM ordered_archive_pages pg
+                  WHERE pg.piece_id = p.id AND coalesce(pg.file_name, '') <> ''
+                  ORDER BY pg.page_no) AS image_names
+     FROM ordered_archive_pieces p
      WHERE person_code = $1
      ORDER BY sort_index, formal_no`,
     [personCode]
   );
 
   if (ordered.rows.length) {
-    return ordered.rows.map((row) => ({
-      category: row.category_code,
-      materialName: row.material_name,
-      serialNo: row.formal_no,
-      pageCount: row.page_count,
-      formalNo: row.formal_no,
-      source: "ordered" as const,
-    }));
+    const titles = await resolveDisplayTitles(
+      personCode,
+      ordered.rows.map((r) => r.formal_no)
+    );
+    return ordered.rows.map((row) => {
+      const raw = row.material_name || "";
+      const better =
+        looksLikePlaceholderName(raw, row.formal_no)
+          ? titles.get(row.formal_no)
+          : undefined;
+      return {
+        category: row.category_code,
+        materialName: better || raw,
+        imageNames: row.image_names,
+        serialNo: row.formal_no,
+        pageCount: row.page_count,
+        formalNo: row.formal_no,
+        source: "ordered" as const,
+      };
+    });
   }
 
   const r = await query<{
@@ -94,21 +167,34 @@ export async function getPersonMaterials(
     serial_no: string;
     page_count: number;
     formal_no: string | null;
+    image_names: string[];
   }>(
-    `SELECT confirmed_category, suggested_category, material_name, serial_no, page_count, formal_no
-     FROM archive_pieces
+    `SELECT confirmed_category, suggested_category, material_name, serial_no, page_count, formal_no,
+            ARRAY(SELECT pg.file_name FROM archive_pages pg
+                  WHERE pg.piece_id = p.id AND coalesce(pg.file_name, '') <> ''
+                  ORDER BY pg.page_no) AS image_names
+     FROM archive_pieces p
      WHERE person_code = $1
      ORDER BY COALESCE(formal_no, serial_no)`,
     [personCode]
   );
-  return r.rows.map((row) => ({
-    category: row.confirmed_category || row.suggested_category || "",
-    materialName: row.material_name || "",
-    serialNo: row.serial_no,
-    pageCount: row.page_count,
-    formalNo: row.formal_no,
-    source: "unordered" as const,
-  }));
+  const refs = r.rows.map((row) => row.formal_no || row.serial_no);
+  const titles = await resolveDisplayTitles(personCode, refs);
+  return r.rows.map((row) => {
+    const ref = row.formal_no || row.serial_no;
+    const raw = row.material_name || "";
+    const better =
+      looksLikePlaceholderName(raw, ref) ? titles.get(ref) : undefined;
+    return {
+      category: row.confirmed_category || row.suggested_category || "",
+      materialName: better || raw,
+      imageNames: row.image_names,
+      serialNo: row.serial_no,
+      pageCount: row.page_count,
+      formalNo: row.formal_no,
+      source: "unordered" as const,
+    };
+  });
 }
 
 function uniqueValues(sources: AuditSource[]) {
@@ -264,6 +350,11 @@ export async function runAuditFromDb(
   );
 
   const byField = new Map<string, typeof sourcesRes.rows>();
+  const materials = await getPersonMaterials(personCode);
+  const imagesByRef = new Map(materials.flatMap((m) => [
+    [m.serialNo, m.imageNames] as const,
+    [m.formalNo || m.serialNo, m.imageNames] as const,
+  ]));
   for (const row of sourcesRes.rows) {
     if (!byField.has(row.field_key)) byField.set(row.field_key, []);
     byField.get(row.field_key)!.push(row);
@@ -289,6 +380,7 @@ export async function runAuditFromDb(
 
     const sources: AuditSource[] = rows.map((row) => ({
       materialName: row.material_name,
+      imageNames: imagesByRef.get(row.material_no || "") || [],
       formYear: row.form_year || "",
       materialNo: row.material_no || "",
       value: row.value,

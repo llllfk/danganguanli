@@ -6,6 +6,7 @@ import { ConfirmModal } from "@/components/ui/ConfirmModal";
 import { RuleEditorModal } from "@/components/shared/RuleEditorModal";
 import { CATEGORY_SHORT, categoryTagColor } from "@/lib/archive-parse";
 import { collectDroppedFiles } from "@/lib/collect-dropped-files";
+import { compressUploadImage } from "@/lib/compress-upload-image";
 import type { ArchiveCategoryCode, ArchivePiece, SortItem } from "@/types";
 
 type Cat = { code: ArchiveCategoryCode; name: string; parent?: string };
@@ -151,6 +152,7 @@ export function ArchiveClient() {
       let code = personCode;
       let lastData: ArchivePiece[] = [];
       let lastStats = { pieces: 0, pages: 0 };
+      let savedBytes = 0;
       for (let i = 0; i < files.length; i += BATCH) {
         const slice = files.slice(i, i + BATCH);
         setTip(
@@ -158,10 +160,13 @@ export function ArchiveClient() {
         );
         const fd = new FormData();
         for (const f of slice) {
+          setTip(`压缩并上传中… ${i + slice.indexOf(f) + 1}/${files.length}`);
           const rel =
             (f as File & { webkitRelativePath?: string }).webkitRelativePath ||
             f.name;
-          fd.append("files", f);
+          const uploadFile = await compressUploadImage(f);
+          savedBytes += f.size - uploadFile.size;
+          fd.append("files", uploadFile);
           fd.append("paths", rel);
         }
         const res = await fetch("/api/archive/upload", {
@@ -180,7 +185,7 @@ export function ArchiveClient() {
       setPieces(lastData);
       setSorted(null);
       setTip(
-        `已读取 ${lastStats.pieces || lastData.length} 件 · ${lastStats.pages || 0} 页（人员 ${code}）`
+        `已读取 ${lastStats.pieces || lastData.length} 件 · ${lastStats.pages || 0} 页（人员 ${code}）${savedBytes > 0 ? `；压缩节省 ${(savedBytes / 1024 / 1024).toFixed(1)} MB` : ""}`
       );
     } catch (e) {
       let msg = e instanceof Error ? e.message : "上传失败";

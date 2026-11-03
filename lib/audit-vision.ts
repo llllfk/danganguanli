@@ -23,6 +23,7 @@ import {
   guessTitleFromRaw,
   looksLikePlaceholderName,
   normalizeOneDate,
+  unwrapAssistantJsonPayload,
 } from "@/lib/vision-meta";
 
 const API = cozeApiBase();
@@ -84,7 +85,8 @@ function cleanTitle(raw: string | undefined): string | undefined {
 }
 
 function parseVisionAnswer(answer: string): VisionExtract {
-  const m = answer.match(/\{[\s\S]*\}/);
+  const payload = unwrapAssistantJsonPayload(answer);
+  const m = payload.match(/\{[\s\S]*\}/);
   if (!m) {
     return {
       fields: {},
@@ -117,6 +119,7 @@ function parseVisionAnswer(answer: string): VisionExtract {
         )
       ) ||
       guessTitleFromRaw(pageText) ||
+      guessTitleFromRaw(payload) ||
       guessTitleFromRaw(answer);
     return {
       fields,
@@ -243,7 +246,25 @@ async function extractFieldsFromImages(
     .filter((m) => m.role === "assistant" && m.type === "answer")
     .map((m) => m.content)
     .join("\n");
-  return parseVisionAnswer(answer);
+  const parsed = parseVisionAnswer(answer);
+  if (!parsed.materialTitle && Object.keys(parsed.fields).length > 0) {
+    console.warn(
+      "audit vision: 有字段但无 materialTitle",
+      materialName,
+      "answerHead=",
+      answer.slice(0, 240)
+    );
+  } else {
+    console.info(
+      "audit vision ok",
+      materialName,
+      "→",
+      parsed.materialTitle || "(无题名)",
+      "fields=",
+      Object.keys(parsed.fields).join(",")
+    );
+  }
+  return parsed;
 }
 
 /**
@@ -419,6 +440,174 @@ async function maybeUpdatePieceTitle(
     [t, personCode, piece.material_no]
   );
   return t;
+}
+
+/**
+ * 出处/页摘要已有正经题名，但左侧件表仍是「档案材料 …」时强制回写。
+ * 核验后、加载材料时都会跑，避免只更新右侧出处。
+ */
+export async function repairPlaceholderTitles(personCode: string): Promise<number> {
+  // 1) 直接从出处题名回写左侧（右侧已对、左侧未对的最常见情况）
+  const fromSources = await query(
+    `UPDATE ordered_archive_pieces p
+     SET material_name = s.title
+     FROM (
+       SELECT material_no,
+              min(material_name) AS title
+       FROM audit_field_sources
+       WHERE person_code = $1
+         AND nullif(trim(material_name), '') IS NOT NULL
+         AND material_name !~ '^档案材料'
+         AND material_name !~ '^[0-9]{4,}-'
+       GROUP BY material_no
+     ) s
+     WHERE p.person_code = $1
+       AND p.formal_no = s.material_no
+       AND (
+         p.material_name IS NULL
+         OR btrim(p.material_name) = ''
+         OR p.material_name ~ '^档案材料'
+         OR p.material_name = p.formal_no
+       )`,
+    [personCode]
+  );
+
+  // 2) 再从页文本缓存题名回写（出处若仍是占位）
+  const fromPages = await query(
+    `UPDATE ordered_archive_pieces p
+     SET material_name = t.title
+     FROM (
+       SELECT piece_ref AS material_no,
+              min(material_name) AS title
+       FROM archive_page_texts
+       WHERE person_code = $1
+         AND nullif(trim(material_name), '') IS NOT NULL
+         AND material_name !~ '^档案材料'
+         AND material_name !~ '^[0-9]{4,}-'
+       GROUP BY piece_ref
+     ) t
+     WHERE p.person_code = $1
+       AND p.formal_no = t.material_no
+       AND (
+         p.material_name IS NULL
+         OR btrim(p.material_name) = ''
+         OR p.material_name ~ '^档案材料'
+         OR p.material_name = p.formal_no
+       )`,
+    [personCode]
+  );
+
+  await query(
+    `UPDATE archive_pieces p
+     SET material_name = s.title,
+         updated_at = CURRENT_TIMESTAMP
+     FROM (
+       SELECT material_no, min(material_name) AS title
+       FROM (
+         SELECT material_no, material_name FROM audit_field_sources
+         WHERE person_code = $1
+         UNION ALL
+         SELECT piece_ref, material_name FROM archive_page_texts
+         WHERE person_code = $1
+       ) u
+       WHERE nullif(trim(material_name), '') IS NOT NULL
+         AND material_name !~ '^档案材料'
+         AND material_name !~ '^[0-9]{4,}-'
+       GROUP BY material_no
+     ) s
+     WHERE p.person_code = $1
+       AND (p.serial_no = s.material_no OR p.formal_no = s.material_no)
+       AND (
+         p.material_name IS NULL
+         OR btrim(p.material_name) = ''
+         OR p.material_name ~ '^档案材料'
+         OR p.material_name = p.serial_no
+         OR p.material_name = coalesce(p.formal_no, '')
+       )`,
+    [personCode]
+  ).catch(() => undefined);
+
+  // 3) 页摘要正文里能猜出表名时再补一轮
+  const rows = await query<{
+    material_no: string;
+    material_name: string | null;
+    text_content: string | null;
+  }>(
+    `SELECT piece_ref AS material_no, material_name, text_content
+     FROM archive_page_texts
+     WHERE person_code = $1
+     ORDER BY piece_ref, page_no`,
+    [personCode]
+  );
+  let guessedN = 0;
+  const seen = new Set<string>();
+  for (const r of rows.rows) {
+    if (seen.has(r.material_no)) continue;
+    const already = cleanTitle(r.material_name || undefined);
+    const guessed = already || cleanTitle(guessTitleFromRaw(r.text_content || ""));
+    if (!guessed) continue;
+    seen.add(r.material_no);
+    const piece = await query<{ material_name: string; material_no: string }>(
+      `SELECT material_name, formal_no AS material_no
+       FROM ordered_archive_pieces
+       WHERE person_code = $1 AND formal_no = $2
+       UNION ALL
+       SELECT material_name, coalesce(formal_no, serial_no) AS material_no
+       FROM archive_pieces
+       WHERE person_code = $1 AND (formal_no = $2 OR serial_no = $2)
+       LIMIT 1`,
+      [personCode, r.material_no]
+    );
+    if (!piece.rows[0]) continue;
+    if (!looksLikePlaceholderName(piece.rows[0].material_name, r.material_no)) {
+      continue;
+    }
+    const written = await maybeUpdatePieceTitle(
+      personCode,
+      piece.rows[0] as PageRow,
+      guessed
+    );
+    if (written === guessed) guessedN += 1;
+  }
+
+  // 旧缓存曾把占位名写进出处。件表修复后也要同步这两处，
+  // 否则默认「复用已有出处」仍会在右侧报告中显示旧名称。
+  for (const target of [
+    { table: "audit_field_sources", ref: "material_no" },
+    { table: "archive_page_texts", ref: "piece_ref" },
+  ]) {
+    await query(
+      `UPDATE ${target.table} dest
+       SET material_name = p.material_name
+       FROM (
+         SELECT formal_no AS material_no, material_name
+         FROM ordered_archive_pieces WHERE person_code = $1
+         UNION ALL
+         SELECT coalesce(formal_no, serial_no), material_name
+         FROM archive_pieces WHERE person_code = $1
+         UNION ALL
+         SELECT serial_no, material_name
+         FROM archive_pieces WHERE person_code = $1
+       ) p
+       WHERE dest.person_code = $1 AND dest.${target.ref} = p.material_no
+         AND nullif(trim(p.material_name), '') IS NOT NULL
+         AND p.material_name !~ '^档案材料'
+         AND p.material_name !~ '^[0-9]{4,}-'
+         AND (
+           nullif(trim(dest.material_name), '') IS NULL
+           OR dest.material_name ~ '^档案材料'
+           OR dest.material_name = dest.${target.ref}
+         )`,
+      [personCode]
+    );
+  }
+
+  const n =
+    (fromSources.rowCount || 0) + (fromPages.rowCount || 0) + guessedN;
+  if (n > 0) {
+    console.info("repairPlaceholderTitles", personCode, "updated", n);
+  }
+  return n;
 }
 
 /** 出处里已有正经题名、件表仍是「档案材料 …」时回写左侧列表 */

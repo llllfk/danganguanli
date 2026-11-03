@@ -114,7 +114,8 @@ export function looksLikePlaceholderName(name: string, serialNo = "") {
   if (serialNo && s === serialNo) return true;
   if (/^\d{4,}-L\d+/i.test(s)) return true;
   // 审核有序件兜底名：档案材料 00001-0300-001
-  if (/^档案材料\b/i.test(s)) return true;
+  // JS 的 \b 不把中文视为单词字符，中文后接空格时不会匹配。
+  if (/^档案材料(?:\s|(?=\d)|$)/.test(s)) return true;
   if (/^\d{4,}-\d{4}-\d{3,}(-\d{3,})?$/i.test(s)) return true;
   if (looksLikeFileName(s)) return true;
   return false;
@@ -129,14 +130,72 @@ export const ARCHIVE_META_PROMPT = `你是干部人事档案材料识别助手�
 - formDate：取 dates 中的最后一个；dates 为空则 ""
 - 禁止编造看不到的内容`;
 
+/**
+ * 拆开模型外层包装（如 OpenAI/豆包 choices[].message.content），
+ * 得到真正的业务 JSON 文本。智能体日志里常见整段包在 choices 里。
+ */
+export function unwrapAssistantJsonPayload(text: string): string {
+  let cur = String(text || "").trim();
+  if (!cur) return "";
+  // 去掉 Markdown 代码块
+  const fence = cur.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) cur = fence[1].trim();
+
+  for (let depth = 0; depth < 4; depth++) {
+    const m = cur.match(/\{[\s\S]*\}/);
+    if (!m) break;
+    try {
+      const obj = JSON.parse(m[0]) as Record<string, unknown>;
+      // 已是业务字段
+      if (
+        obj.materialTitle != null ||
+        obj.materialName != null ||
+        obj.material_name != null ||
+        obj.name != null ||
+        obj.birth != null ||
+        obj.formDate != null ||
+        obj.pageText != null
+      ) {
+        return m[0];
+      }
+      // OpenAI / 豆包 Chat Completions
+      const choices = obj.choices;
+      if (Array.isArray(choices) && choices[0]) {
+        const msg = (choices[0] as { message?: { content?: unknown } })
+          .message;
+        const content = msg?.content;
+        if (typeof content === "string" && content.trim()) {
+          cur = content.trim();
+          continue;
+        }
+      }
+      // 某些网关再包一层
+      if (typeof obj.content === "string" && obj.content.trim()) {
+        cur = obj.content.trim();
+        continue;
+      }
+      if (typeof obj.answer === "string" && obj.answer.trim()) {
+        cur = obj.answer.trim();
+        continue;
+      }
+      return m[0];
+    } catch {
+      break;
+    }
+  }
+  return cur;
+}
+
 /** 从模型原文/页摘要中兜出表名（审核、整编共用） */
 export function guessTitleFromRaw(raw: string): string | undefined {
   const patterns = [
     /[《「]([^》」]{2,40})[》」]/,
-    /"materialTitle"\s*:\s*"([^"]{2,40})"/i,
-    /"materialName"\s*:\s*"([^"]{2,40})"/i,
-    /(干部履历表|入党志愿书|入党申请书|转正申请书|毕业生登记表|学习成绩表|干部任免审批表|年度考核登记表|劳动合同书|工资变动审批表|专业技术人员[^，。；\n]{0,20}(?:考核评价表|考核登记表)|员工年度考核登记表|学年评语)/,
-    /([\u4e00-\u9fa5A-Za-z0-9（）()]{2,36}(?:登记表|审批表|志愿书|申请书|评价表|鉴定表|成绩表|合同书|证明书|体检表|评语表))/,
+    /"materialTitle"\s*:\s*"([^"]{2,48})"/i,
+    /\\"materialTitle\\"\s*:\s*\\"([^\\"]{2,48})\\"/i,
+    /"materialName"\s*:\s*"([^"]{2,48})"/i,
+    /\\"materialName\\"\s*:\s*\\"([^\\"]{2,48})\\"/i,
+    /(干部履历表|入党志愿书|入党申请书|转正申请书|毕业生登记表|学习成绩表|干部任免审批表|年度考核登记表|劳动合同书|工资变动审批表|专业技术人员[^，。；\n]{0,24}(?:考核评价表|考核登记表)(?:（\d{4}年度）)?|员工年度考核登记表|学年评语)/,
+    /([\u4e00-\u9fa5A-Za-z0-9（）()]{2,40}(?:登记表|审批表|志愿书|申请书|评价表|鉴定表|成绩表|合同书|证明书|体检表|评语表)(?:（\d{4}年度）)?)/,
   ];
   for (const re of patterns) {
     const m = raw.match(re);
@@ -155,7 +214,8 @@ export function guessTitleFromRaw(raw: string): string | undefined {
 
 export function parseArchiveMetaJson(text: string): VisionExtractResult {
   const raw = text.trim();
-  const m = raw.match(/\{[\s\S]*\}/);
+  const payload = unwrapAssistantJsonPayload(raw);
+  const m = payload.match(/\{[\s\S]*\}/);
   if (!m) {
     const fallbackDates = extractAllDates(raw);
     return {
@@ -170,8 +230,8 @@ export function parseArchiveMetaJson(text: string): VisionExtractResult {
     let materialName = String(
       obj.materialName ||
         obj.material_name ||
+        obj.materialTitle ||
         obj.title ||
-        obj.name ||
         obj.题名 ||
         ""
     )

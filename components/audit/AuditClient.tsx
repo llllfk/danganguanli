@@ -5,12 +5,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { RuleEditorModal } from "@/components/shared/RuleEditorModal";
 import { collectDroppedFiles } from "@/lib/collect-dropped-files";
-import type { AuditFieldResult, AuditReport } from "@/types";
+import { compressUploadImage } from "@/lib/compress-upload-image";
+import { auditMaterialLabel } from "@/lib/audit-label";
+import type { AuditFieldResult, AuditReport, AuditSource } from "@/types";
 
 type Cat = { code: string; name: string };
 type Mat = {
   category: string;
   materialName: string;
+  imageNames?: string[];
   serialNo: string;
   pageCount: number;
   formalNo: string | null;
@@ -40,6 +43,14 @@ export function AuditClient() {
   const [previewErr, setPreviewErr] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  function sourceLabel(source: AuditSource) {
+    // 来源只显示题名；旧报告优先使用当前已加载材料的最新题名。
+    const material = materials.find((m) =>
+      m.formalNo === source.materialNo || m.serialNo === source.materialNo
+    );
+    return material?.materialName || source.materialName || "未命名材料";
+  }
 
   useEffect(() => {
     const el = folderInputRef.current;
@@ -97,6 +108,7 @@ export function AuditClient() {
         categories: Cat[];
       } | null = null;
       let sortStart = 0;
+      let savedBytes = 0;
       for (let i = 0; i < files.length; i += BATCH) {
         const slice = files.slice(i, i + BATCH);
         setTip(
@@ -106,10 +118,13 @@ export function AuditClient() {
         form.append("clearFirst", i === 0 ? "1" : "0");
         form.append("sortStart", String(sortStart));
         for (const f of slice) {
+          setTip(`压缩并上传中… ${i + slice.indexOf(f) + 1}/${files.length}`);
           const rel =
             (f as File & { webkitRelativePath?: string }).webkitRelativePath ||
             f.name;
-          form.append("files", f);
+          const uploadFile = await compressUploadImage(f);
+          savedBytes += f.size - uploadFile.size;
+          form.append("files", uploadFile);
           form.append("paths", rel);
         }
         const res = await fetch("/api/audit/upload", {
@@ -130,7 +145,7 @@ export function AuditClient() {
       setLoaded(true);
       setReport(null);
       setTip(
-        `已上传人员 ${last.personCode}：${last.pieceCount} 件 / ${last.pageCount} 页（存储：${last.storage === "s3" ? "Coze S3" : "本地"}）`
+        `已上传人员 ${last.personCode}：${last.pieceCount} 件 / ${last.pageCount} 页（存储：${last.storage === "s3" ? "Coze S3" : "本地"}）${savedBytes > 0 ? `；压缩节省 ${(savedBytes / 1024 / 1024).toFixed(1)} MB` : ""}`
       );
       // 刷新已入库人员列表
       try {
@@ -571,10 +586,10 @@ export function AuditClient() {
                                   type="button"
                                   onClick={() => openPreview(x)}
                                   className="w-full flex items-center gap-2 px-3 py-2 border-b border-[#eef2f7] last:border-0 text-left hover:bg-[#eef6fe] transition"
-                                  title="点击预览"
+                                  title={auditMaterialLabel(x.materialName, x.imageNames, pieceRefOf(x))}
                                 >
-                                  <span className="flex-1 text-[13px] text-[#1f2937] truncate">
-                                    {x.materialName || pieceRefOf(x)}
+                                  <span className="flex-1 min-w-0 text-[13px] text-[#1f2937] break-words whitespace-normal">
+                                    {auditMaterialLabel(x.materialName, x.imageNames, pieceRefOf(x))}
                                   </span>
                                   <span className="text-[12px] text-[#6b7a8f] shrink-0">
                                     {x.pageCount}页
@@ -685,18 +700,14 @@ export function AuditClient() {
                                       {i + 1}. {s.value}
                                       <span className="text-[#7b8da0]">
                                         {" "}
-                                        （{s.materialName}
-                                        {s.formYear ? ` ${s.formYear}` : ""}）
+                                        （{sourceLabel(s)}）
                                       </span>
                                     </li>
                                   ))}
                                 </ol>
                               ) : f.sources[0] ? (
-                                <div className="mt-1 text-xs text-[#7b8da0]">
-                                  来源：{f.sources[0].materialName}
-                                  {f.sources[0].formYear
-                                    ? `（${f.sources[0].formYear}）`
-                                    : ""}
+                                <div className="mt-1 text-xs text-[#7b8da0] break-words">
+                                  来源：{sourceLabel(f.sources[0])}
                                 </div>
                               ) : (
                                 <div className="mt-1 text-xs text-[#7b8da0]">
@@ -829,7 +840,7 @@ export function AuditClient() {
         {preview ? (
           <div className="space-y-3 text-sm">
             <p className="text-[#1f2937]">
-              材料名称：{preview.materialName || "-"}
+              {auditMaterialLabel(preview.materialName, preview.imageNames?.slice(previewPage - 1, previewPage), pieceRefOf(preview))}
             </p>
             <p className="text-[#7b8da0]">
               {preview.source === "unordered" ? "整编件" : "有序件"} ·{" "}
@@ -885,9 +896,9 @@ export function AuditClient() {
           {sourceField?.sources.map((s, i) => (
             <div
               key={i}
-              className="rounded-lg border border-[#e4ebf3] px-3 py-2 text-sm"
+              className="rounded-lg border border-[#e4ebf3] px-3 py-2 text-sm break-words"
             >
-              {s.materialName}（{s.formYear}）[{s.materialNo}]：{s.value}
+              {sourceLabel(s)}：{s.value}
             </div>
           ))}
           {!sourceField?.sources.length ? (

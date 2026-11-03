@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureAuditSourcesByVision } from "@/lib/audit-vision";
+import {
+  ensureAuditSourcesByVision,
+  repairPlaceholderTitles,
+} from "@/lib/audit-vision";
 import { runAuditFromDb, summarizeAudit } from "@/lib/repos/audit";
 import { countAuditSources } from "@/lib/repos/audit-upload";
 import { countPageTexts } from "@/lib/repos/page-texts";
@@ -72,6 +75,12 @@ export async function POST(request: NextRequest) {
         before > 0
           ? `复用已有出处 ${before} 条，仅规则比对；`
           : "仅规则比对；";
+    }
+
+    // 视觉结果已在页摘要里，但件名/出处仍可能停在「档案材料 …」——每次核验都回填
+    const repaired = await repairPlaceholderTitles(personCode).catch(() => 0);
+    if (repaired > 0) {
+      visionNote += `已从页摘要回填题名 ${repaired} 件；`;
     }
 
     const report = await runAuditFromDb(personCode, personName);

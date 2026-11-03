@@ -119,6 +119,7 @@ export interface SortItem {
 
 export interface AuditSource {
   materialName: string;
+  imageNames?: string[];
   formYear: string;
   materialNo: string;
   value: string;
