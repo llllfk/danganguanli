@@ -112,7 +112,93 @@ export async function getPersonMaterials(
 }
 
 function uniqueValues(sources: AuditSource[]) {
-  return [...new Set(sources.map((s) => s.value))];
+  return [...new Set(sources.map((s) => s.value).map((v) => v.trim()).filter(Boolean))];
+}
+
+function pad2(n: string) {
+  return n.padStart(2, "0");
+}
+
+/** 日期写法归一：1992年8月 / 1992-8 / 1992.08 → 1992.08 */
+function normalizeDateTokens(text: string) {
+  return String(text || "")
+    .replace(
+      /(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?/g,
+      (_, y, m, d) =>
+        d ? `${y}.${pad2(m)}.${pad2(d)}` : `${y}.${pad2(m)}`
+    )
+    .replace(
+      /(\d{4})[./\-](\d{1,2})(?:[./\-](\d{1,2}))?/g,
+      (_, y, m, d) =>
+        d ? `${y}.${pad2(m)}.${pad2(d)}` : `${y}.${pad2(m)}`
+    );
+}
+
+function normCompareText(text: string) {
+  return normalizeDateTokens(text)
+    .replace(/[（(][^）)]*[）)]/g, "") // 去掉材料出处括号
+    .replace(/[；;。，,、\s　]/g, "")
+    .replace(/起在|起至|至今在|至今/g, "")
+    .toLowerCase();
+}
+
+/**
+ * 叙述类字段（经历/认定）：详略不同但关键年月+单位一致 → 视为一致。
+ * 例：「1992年8月起在E公司工作」与「…；1992.08至今 E公司工作」
+ */
+function narrativesCompatible(values: string[]): boolean {
+  const norms = [...new Set(values.map(normCompareText).filter(Boolean))];
+  if (norms.length <= 1) return true;
+  const sorted = [...norms].sort((a, b) => b.length - a.length);
+  const cover = sorted[0];
+  return sorted.slice(1).every((s) => {
+    if (cover.includes(s) || s.includes(cover)) return true;
+    // 短句中的「年月 + 机构」片段都应在长句中出现
+    const dates = s.match(/\d{4}\.\d{2}(?:\.\d{2})?/g) || [];
+    const orgs =
+      s.match(
+        /[\u4e00-\u9fa5a-z0-9]{2,20}?(?:公司|大学|学院|学校|局|委|部|厅|中心|医院|研究所|集团)/gi
+      ) || [];
+    if (!dates.length && !orgs.length) return false;
+    const dateOk = dates.every((d) => cover.includes(d));
+    const orgOk = orgs.every((o) => cover.includes(o));
+    return dateOk && orgOk;
+  });
+}
+
+function datesCompatible(values: string[]): boolean {
+  const norms = [
+    ...new Set(
+      values
+        .map((v) => {
+          const t = normalizeDateTokens(v).replace(/[^\d.]/g, "");
+          const m = t.match(/(\d{4}\.\d{2}(?:\.\d{2})?)/);
+          return m?.[1] || "";
+        })
+        .filter(Boolean)
+    ),
+  ];
+  if (norms.length <= 1) return true;
+  // 同年月即可（有的只写到月）
+  const months = [
+    ...new Set(norms.map((n) => n.split(".").slice(0, 2).join("."))),
+  ];
+  return months.length <= 1;
+}
+
+/** 多出处取值是否实质一致（避免经历详略不同误报） */
+function valuesAreConsistent(fieldKey: string, values: string[]): boolean {
+  const vals = [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+  if (vals.length <= 1) return true;
+  if (fieldKey === "experience" || fieldKey === "recognition") {
+    return narrativesCompatible(vals);
+  }
+  if (fieldKey === "birth" || fieldKey === "work" || fieldKey === "party") {
+    return datesCompatible(vals);
+  }
+  // 学历学位等：归一后全等
+  const norms = [...new Set(vals.map(normCompareText))];
+  return norms.length <= 1;
 }
 
 /** 审核预览：有序件 formal_no 或乱序件 serial_no */
@@ -220,7 +306,7 @@ export async function runAuditFromDb(
     baseline = baseline || rows[0].value;
 
     const values = uniqueValues(sources);
-    if (values.length === 1) {
+    if (valuesAreConsistent(key, values)) {
       fields.push({
         field: key,
         label,
@@ -248,7 +334,9 @@ export async function runAuditFromDb(
         aiOpinion:
           key === "birth"
             ? `以最早形成材料《${earliest.material_name}》（${earliest.form_year}）记载的 ${earliest.value} 为准；请核查差异材料原文。`
-            : `检测到多处记载不一致。建议以基准值「${baseline}」为准，并核查差异材料原文。`,
+            : key === "experience" || key === "recognition"
+              ? `各材料详略不同或关键节点不一致。建议以记载更完整的「${baseline}」为准，并核对原文年月与单位。`
+              : `检测到多处记载不一致。建议以基准值「${baseline}」为准，并核查差异材料原文。`,
       });
     }
   }
