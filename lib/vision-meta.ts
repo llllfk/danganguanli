@@ -41,20 +41,31 @@ export function mergeVisionMeta(
   };
 }
 
-const DATE_RE =
+const DATE_FULL_RE =
   /(\d{4})\s*[年./\-]\s*(\d{1,2})\s*[月./\-]\s*(\d{1,2})\s*日?/g;
+/** 仅年月：成绩单/证明常见「2004年6月」 */
+const DATE_YM_RE = /(\d{4})\s*[年./\-]\s*(\d{1,2})\s*月(?!\s*\d)/g;
 
 export function normalizeOneDate(input: string): string | null {
   const s = String(input || "").trim();
   if (!s) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})/);
-  if (!m) return null;
-  const y = m[1];
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
+  const full = s.match(/(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})/);
+  if (full) {
+    const y = full[1];
+    const mo = Number(full[2]);
+    const d = Number(full[3]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const ym = s.match(/(\d{4})[年./-](\d{1,2})(?:月)?$/);
+  if (ym) {
+    const mo = Number(ym[2]);
+    if (mo < 1 || mo > 12) return null;
+    return `${ym[1]}-${String(mo).padStart(2, "0")}-01`;
+  }
+  return null;
 }
 
 /** 从文本中按出现顺序抽出全部可解析日期 */
@@ -62,10 +73,17 @@ export function extractAllDates(text: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const src = String(text || "");
-  DATE_RE.lastIndex = 0;
+  DATE_FULL_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = DATE_RE.exec(src))) {
+  while ((m = DATE_FULL_RE.exec(src))) {
     const n = normalizeOneDate(`${m[1]}-${m[2]}-${m[3]}`);
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  DATE_YM_RE.lastIndex = 0;
+  while ((m = DATE_YM_RE.exec(src))) {
+    const n = normalizeOneDate(`${m[1]}-${m[2]}`);
     if (!n || seen.has(n)) continue;
     seen.add(n);
     out.push(n);
@@ -109,22 +127,48 @@ export const ARCHIVE_META_PROMPT = `你是干部人事档案材料识别助手�
 - formDate：取 dates 中的最后一个；dates 为空则 ""
 - 禁止编造看不到的内容`;
 
+function guessTitleFromRaw(raw: string): string | undefined {
+  const patterns = [
+    /[《「]([^》」]{2,40})[》」]/,
+    /(干部履历表|入党志愿书|入党申请书|转正申请书|毕业生登记表|学习成绩表|干部任免审批表|年度考核登记表|劳动合同书|工资变动审批表)/,
+  ];
+  for (const re of patterns) {
+    const m = raw.match(re);
+    if (m?.[1]) {
+      const t = m[1].trim().replace(/\s+/g, "");
+      if (t && !looksLikeFileName(t) && !/^\d{4,}-L\d+/i.test(t)) return t;
+    }
+  }
+  return undefined;
+}
+
 export function parseArchiveMetaJson(text: string): VisionExtractResult {
   const raw = text.trim();
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) {
     const fallbackDates = extractAllDates(raw);
     return {
+      materialName: guessTitleFromRaw(raw),
       formDate: pickLastDate(fallbackDates),
+      dates: fallbackDates.length ? fallbackDates : undefined,
       raw,
     };
   }
   try {
     const obj = JSON.parse(m[0]) as Record<string, unknown>;
-    let materialName = String(obj.materialName || obj.material_name || "")
+    let materialName = String(
+      obj.materialName ||
+        obj.material_name ||
+        obj.title ||
+        obj.name ||
+        obj.题名 ||
+        ""
+    )
       .trim()
       .replace(/\s+/g, "");
-    if (looksLikeFileName(materialName)) materialName = "";
+    if (looksLikeFileName(materialName) || /^\d{4,}-L\d+/i.test(materialName)) {
+      materialName = "";
+    }
 
     const datesFromArr: string[] = [];
     const arr = obj.dates;
@@ -136,7 +180,7 @@ export function parseArchiveMetaJson(text: string): VisionExtractResult {
     }
 
     const fromForm = normalizeOneDate(
-      String(obj.formDate || obj.form_date || "")
+      String(obj.formDate || obj.form_date || obj.date || "")
     );
     const fromRaw = extractAllDates(raw);
     const all = [...datesFromArr];
@@ -151,7 +195,7 @@ export function parseArchiveMetaJson(text: string): VisionExtractResult {
       .slice(0, 80);
 
     return {
-      materialName: materialName || undefined,
+      materialName: materialName || guessTitleFromRaw(raw) || undefined,
       formDate,
       dates: all.length ? all : undefined,
       summary: summary || undefined,
@@ -160,6 +204,7 @@ export function parseArchiveMetaJson(text: string): VisionExtractResult {
   } catch {
     const fallback = extractAllDates(raw);
     return {
+      materialName: guessTitleFromRaw(raw),
       formDate: pickLastDate(fallback),
       dates: fallback.length ? fallback : undefined,
       raw,

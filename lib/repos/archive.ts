@@ -305,7 +305,12 @@ async function visionExtractOnePiece(
     // 正确多图：一条消息内 text + 多个 {type:image,file_id}
     const meta = await extractMetaFromImages(images);
     if (!meta.materialName && !meta.formDate) {
-      return { ok: false, error: "视觉未返回有效字段" };
+      const minPage = Math.min(...page.rows.map((r) => r.page_no));
+      const tip =
+        minPage > 1
+          ? `视觉未返回有效字段（该件缺少第1页，当前从第${minPage}页起，共${page.rows.length}页）`
+          : `视觉未返回有效字段（Bot 未给出题名/日期，共送${images.length}页）`;
+      return { ok: false, error: tip };
     }
     const cur = await query<{ material_name: string | null }>(
       `SELECT material_name FROM archive_pieces
