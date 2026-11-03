@@ -219,6 +219,7 @@ export function ArchiveClient() {
       let lastFailed = 0;
       let visionEnabled = true;
       let visionReason = "";
+      const skippedVision: string[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -240,6 +241,7 @@ export function ArchiveClient() {
             reason?: string;
             extracted?: number;
             failed?: number;
+            failedSerials?: string[];
             data?: ArchivePiece[];
             error?: string;
           };
@@ -274,28 +276,41 @@ export function ArchiveClient() {
               next[idx] = { ...prev[idx], ...ev.piece! };
               return next;
             });
-            const failHint =
-              ev.vision === "fail" && ev.error
-                ? ` · 视觉失败：${ev.error}`
-                : "";
-            setTip(`分类中 ${doneN}/${totalN}${failHint}…`);
-            if (ev.vision === "fail" && ev.error) {
-              setError(`视觉提取失败（${ev.piece.serialNo}）：${ev.error}`);
+            if (ev.vision === "fail" && ev.piece.serialNo) {
+              skippedVision.push(ev.piece.serialNo);
             }
+            // 单件视觉失败只跳过，不打断、不弹红错；进度里轻提示
+            setTip(
+              skippedVision.length
+                ? `分类中 ${doneN}/${totalN}（已跳过视觉 ${skippedVision.length} 件）…`
+                : `分类中 ${doneN}/${totalN}…`
+            );
           } else if (ev.type === "done") {
             lastExtracted = ev.extracted || 0;
             lastFailed = ev.failed || 0;
             if (ev.data?.length) setPieces(ev.data);
             const totalN = ev.total || pieces.length;
             setClassifyProgress({ done: totalN, total: totalN });
+            const failList =
+              ev.failedSerials?.length
+                ? ev.failedSerials
+                : skippedVision;
             const visionTip = visionEnabled
-              ? `（视觉 ${lastExtracted}/${totalN}${
-                  lastFailed ? `，失败 ${lastFailed}` : ""
+              ? `（视觉成功 ${lastExtracted} 件${
+                  lastFailed
+                    ? `，跳过 ${lastFailed} 件：${failList.slice(0, 8).join("、")}${
+                        failList.length > 8 ? "…" : ""
+                      }`
+                    : ""
                 }）`
               : `（未跑视觉：${visionReason}）`;
             setTip(
               `智能分类完成 ${totalN} 件${visionTip}，可修改核定分类后排序`
             );
+            // 仅结束时汇总提示，不设为阻断性 error
+            if (lastFailed > 0) {
+              setError("");
+            }
           }
         }
       }

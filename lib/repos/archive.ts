@@ -455,6 +455,9 @@ export type ClassifyProgressEvent =
       extracted: number;
       failed: number;
       total: number;
+      /** 视觉跳过的件号（不中断分类，结束时一并提示） */
+      failedSerials?: string[];
+      failedReasons?: Array<{ serialNo: string; error: string }>;
       data: ArchivePiece[];
     }
   | { type: "error"; error: string };
@@ -531,6 +534,7 @@ export async function classifyPersonPiecesProgressive(
   let done = 0;
   let extracted = 0;
   let failed = 0;
+  const failedReasons: Array<{ serialNo: string; error: string }> = [];
   let emitChain: Promise<void> = Promise.resolve();
 
   async function processOne(p: ArchivePiece) {
@@ -545,8 +549,13 @@ export async function classifyPersonPiecesProgressive(
         const r = await visionExtractOnePiece(personCode, p.serialNo);
         if (r.ok) vision = "ok";
         else {
+          // 视觉失败：跳过该件视觉，仍用现有题名做分类，不中断后续件
           vision = "fail";
-          err = r.error;
+          err = r.error || "视觉跳过";
+          failedReasons.push({
+            serialNo: p.serialNo,
+            error: err,
+          });
         }
       } else {
         vision = "skip";
@@ -594,6 +603,8 @@ export async function classifyPersonPiecesProgressive(
     extracted,
     failed,
     total,
+    failedSerials: failedReasons.map((f) => f.serialNo),
+    failedReasons,
     data,
   });
   return data;
