@@ -20,6 +20,7 @@ import {
 } from "@/lib/repos/page-texts";
 import { getObjectBytes } from "@/lib/storage";
 import {
+  guessTitleFromRaw,
   looksLikePlaceholderName,
   normalizeOneDate,
 } from "@/lib/vision-meta";
@@ -74,9 +75,24 @@ function buildPrompt(pageCount: number, materialName: string) {
 - 日期统一 YYYY-MM-DD；禁止编造`;
 }
 
+function cleanTitle(raw: string | undefined): string | undefined {
+  const t = String(raw || "")
+    .trim()
+    .replace(/\s+/g, "");
+  if (!t || looksLikePlaceholderName(t)) return undefined;
+  return t;
+}
+
 function parseVisionAnswer(answer: string): VisionExtract {
   const m = answer.match(/\{[\s\S]*\}/);
-  if (!m) return { fields: {}, pageText: "", raw: answer };
+  if (!m) {
+    return {
+      fields: {},
+      pageText: "",
+      materialTitle: guessTitleFromRaw(answer),
+      raw: answer,
+    };
+  }
   try {
     const obj = JSON.parse(m[0]) as Record<string, unknown>;
     const fields: Record<string, string> = {};
@@ -89,17 +105,32 @@ function parseVisionAnswer(answer: string): VisionExtract {
       fields[k] = v;
     }
     const pageText = String(obj.pageText || "").trim();
-    const materialTitle = String(obj.materialTitle || obj.material_title || "")
-      .trim()
-      .replace(/\s+/g, "");
+    const materialTitle =
+      cleanTitle(
+        String(
+          obj.materialTitle ||
+            obj.material_title ||
+            obj.materialName ||
+            obj.title ||
+            obj.题名 ||
+            ""
+        )
+      ) ||
+      guessTitleFromRaw(pageText) ||
+      guessTitleFromRaw(answer);
     return {
       fields,
       pageText,
-      materialTitle: materialTitle || undefined,
+      materialTitle,
       raw: answer,
     };
   } catch {
-    return { fields: {}, pageText: "", raw: answer };
+    return {
+      fields: {},
+      pageText: "",
+      materialTitle: guessTitleFromRaw(answer),
+      raw: answer,
+    };
   }
 }
 
@@ -442,15 +473,69 @@ async function syncTitlesFromSources(personCode: string) {
   );
 }
 
+async function resolveSourceTitle(
+  personCode: string,
+  piece: PageRow,
+  materialTitle?: string,
+  rawHint?: string
+): Promise<string> {
+  const guessed = guessTitleFromRaw(rawHint || "");
+  for (const cand of [materialTitle, guessed]) {
+    const t = cleanTitle(cand);
+    if (!t) continue;
+    const written = await maybeUpdatePieceTitle(personCode, piece, t);
+    if (written && !looksLikePlaceholderName(written, piece.material_no)) {
+      return written;
+    }
+    return t;
+  }
+
+  // 强制重抽会清空出处：再从页文本缓存 / 旧出处里找正经题名
+  const prev = await query<{ material_name: string }>(
+    `SELECT material_name FROM (
+       SELECT material_name, id
+       FROM audit_field_sources
+       WHERE person_code = $1 AND material_no = $2
+       UNION ALL
+       SELECT material_name, id
+       FROM archive_page_texts
+       WHERE person_code = $1 AND piece_ref = $2
+     ) t
+     WHERE nullif(trim(material_name), '') IS NOT NULL
+       AND material_name !~ '^档案材料'
+       AND material_name !~ '^[0-9]{4,}-'
+     ORDER BY id DESC
+     LIMIT 1`,
+    [personCode, piece.material_no]
+  );
+  if (prev.rows[0]?.material_name) {
+    const keep = cleanTitle(prev.rows[0].material_name);
+    if (keep) {
+      await maybeUpdatePieceTitle(personCode, piece, keep);
+      return keep;
+    }
+  }
+
+  const cur = (piece.material_name || "").trim();
+  if (cur && !looksLikePlaceholderName(cur, piece.material_no)) return cur;
+
+  // 仍无题名：来源处显示件号，避免两侧都刷成「档案材料 …」
+  return piece.material_no || "未命名材料";
+}
+
 async function insertFieldSources(
   personCode: string,
   piece: PageRow,
   fields: Record<string, string>,
-  materialTitle?: string
+  materialTitle?: string,
+  rawHint?: string
 ) {
-  const displayName =
-    (await maybeUpdatePieceTitle(personCode, piece, materialTitle)) ||
-    piece.material_name;
+  const displayName = await resolveSourceTitle(
+    personCode,
+    piece,
+    materialTitle,
+    rawHint
+  );
   const year = (piece.form_date || "").slice(0, 4);
   let n = 0;
   for (const [fieldKey, value] of Object.entries(fields)) {
@@ -509,6 +594,19 @@ export async function ensureAuditSourcesByVision(
     await query(`DELETE FROM audit_field_sources WHERE person_code = $1`, [
       personCode,
     ]);
+    // 清掉缓存里被污染的「档案材料 …」题名，避免再次写回出处
+    await query(
+      `UPDATE archive_page_texts
+       SET material_name = NULL
+       WHERE person_code = $1
+         AND (
+           material_name IS NULL
+           OR btrim(material_name) = ''
+           OR material_name ~ '^档案材料'
+           OR material_name ~ '^[0-9]{4,}-'
+         )`,
+      [personCode]
+    ).catch(() => undefined);
   }
 
   const pages = await listPagesForAudit(personCode);
@@ -542,15 +640,27 @@ export async function ensureAuditSourcesByVision(
           )
         );
         const fields: Record<string, string> = {};
+        let cachedTitle: string | undefined;
+        const rawBits: string[] = [];
         for (const c of cachedList) {
           if (!c) continue;
           for (const [k, v] of Object.entries(c.fields || {})) {
             if (v && !fields[k]) fields[k] = v;
           }
+          if (!cachedTitle && cleanTitle(c.materialName)) {
+            cachedTitle = cleanTitle(c.materialName);
+          }
+          if (c.textContent) rawBits.push(c.textContent);
         }
         if (Object.keys(fields).length > 0) {
           fromCache += piecePages.length;
-          extracted += await insertFieldSources(personCode, head, fields);
+          extracted += await insertFieldSources(
+            personCode,
+            head,
+            fields,
+            cachedTitle,
+            rawBits.join("\n")
+          );
           continue;
         }
       }
@@ -575,11 +685,12 @@ export async function ensureAuditSourcesByVision(
       );
       fromVision += images.length;
 
-      const title =
-        result.materialTitle &&
-        !looksLikePlaceholderName(result.materialTitle)
-          ? result.materialTitle
-          : head.material_name;
+      const resolvedTitle = await resolveSourceTitle(
+        personCode,
+        head,
+        result.materialTitle,
+        `${result.pageText || ""}\n${result.raw || ""}`
+      );
 
       // 首页写合并结果；其余页写占位便于缓存命中
       for (const p of piecePages) {
@@ -588,7 +699,7 @@ export async function ensureAuditSourcesByVision(
           personCode,
           pieceRef: p.material_no,
           pageNo: p.page_no,
-          materialName: title,
+          materialName: resolvedTitle,
           filePath: p.file_path || undefined,
           textContent: isFirst ? result.pageText || result.raw || "" : "",
           fields: isFirst ? result.fields : {},
@@ -600,7 +711,8 @@ export async function ensureAuditSourcesByVision(
         personCode,
         head,
         result.fields,
-        result.materialTitle
+        resolvedTitle,
+        `${result.pageText || ""}\n${result.raw || ""}`
       );
     } catch (e) {
       console.warn("audit vision piece failed", head.material_no, e);

@@ -129,16 +129,25 @@ export const ARCHIVE_META_PROMPT = `你是干部人事档案材料识别助手�
 - formDate：取 dates 中的最后一个；dates 为空则 ""
 - 禁止编造看不到的内容`;
 
-function guessTitleFromRaw(raw: string): string | undefined {
+/** 从模型原文/页摘要中兜出表名（审核、整编共用） */
+export function guessTitleFromRaw(raw: string): string | undefined {
   const patterns = [
     /[《「]([^》」]{2,40})[》」]/,
-    /(干部履历表|入党志愿书|入党申请书|转正申请书|毕业生登记表|学习成绩表|干部任免审批表|年度考核登记表|劳动合同书|工资变动审批表)/,
+    /"materialTitle"\s*:\s*"([^"]{2,40})"/i,
+    /"materialName"\s*:\s*"([^"]{2,40})"/i,
+    /(干部履历表|入党志愿书|入党申请书|转正申请书|毕业生登记表|学习成绩表|干部任免审批表|年度考核登记表|劳动合同书|工资变动审批表|专业技术人员[^，。；\n]{0,20}(?:考核评价表|考核登记表)|员工年度考核登记表|学年评语)/,
+    /([\u4e00-\u9fa5A-Za-z0-9（）()]{2,36}(?:登记表|审批表|志愿书|申请书|评价表|鉴定表|成绩表|合同书|证明书|体检表|评语表))/,
   ];
   for (const re of patterns) {
     const m = raw.match(re);
-    if (m?.[1]) {
-      const t = m[1].trim().replace(/\s+/g, "");
-      if (t && !looksLikeFileName(t) && !/^\d{4,}-L\d+/i.test(t)) return t;
+    const hit = (m?.[1] || m?.[0] || "").trim().replace(/\s+/g, "");
+    if (
+      hit &&
+      !looksLikeFileName(hit) &&
+      !looksLikePlaceholderName(hit) &&
+      !/^档案材料/i.test(hit)
+    ) {
+      return hit;
     }
   }
   return undefined;
