@@ -1,5 +1,5 @@
+import ExcelJS from "exceljs";
 import type { SortItem } from "@/types";
-import * as XLSX from "xlsx";
 
 /** 附件2 类目展示结构 */
 const MAJOR: Array<{
@@ -55,8 +55,22 @@ const SIMPLE_PREFIX: Record<string, string> = {
   "1000": "10",
 };
 
+const THIN: Partial<ExcelJS.Border> = {
+  style: "thin",
+  color: { argb: "FF000000" },
+};
+
+const BOX: Partial<ExcelJS.Borders> = {
+  top: THIN,
+  left: THIN,
+  bottom: THIN,
+  right: THIN,
+};
+
 function splitDate(formDate: string) {
-  const m = String(formDate || "").match(/(\d{4})[-/.年]?(\d{1,2})?[-/.月]?(\d{1,2})?/);
+  const m = String(formDate || "").match(
+    /(\d{4})[-/.年]?(\d{1,2})?[-/.月]?(\d{1,2})?/
+  );
   if (!m) return { y: "", m: "", d: "" };
   return {
     y: m[1] || "",
@@ -65,46 +79,172 @@ function splitDate(formDate: string) {
   };
 }
 
-function emptyRow(): (string | number)[] {
-  return ["", "", "", "", "", "", "", ""];
+function styleRange(
+  ws: ExcelJS.Worksheet,
+  row: number,
+  fromCol: number,
+  toCol: number,
+  opts: {
+    bold?: boolean;
+    align?: ExcelJS.Alignment["horizontal"];
+    border?: boolean;
+    size?: number;
+  }
+) {
+  for (let c = fromCol; c <= toCol; c++) {
+    const cell = ws.getCell(row, c);
+    cell.font = {
+      name: "宋体",
+      bold: !!opts.bold,
+      size: opts.size || 11,
+    };
+    cell.alignment = {
+      vertical: "middle",
+      horizontal: opts.align || "center",
+      wrapText: true,
+    };
+    if (opts.border) cell.border = BOX as ExcelJS.Borders;
+  }
 }
 
-/** 按附件2结构生成 AOA，再写 xlsx */
-export function buildCatalogWorkbook(
+function writeHeader(ws: ExcelJS.Worksheet, personName: string) {
+  // A 列留白，B–H 为制式区（对齐附件2）
+  ws.mergeCells(1, 2, 1, 8);
+  ws.getCell(1, 2).value = "人事档案目录";
+  styleRange(ws, 1, 2, 8, { bold: true, size: 16, border: true });
+
+  ws.mergeCells(2, 2, 2, 8);
+  ws.getCell(2, 2).value = `姓名：${personName}`;
+  styleRange(ws, 2, 2, 8, {
+    bold: true,
+    align: "left",
+    size: 12,
+    border: true,
+  });
+
+  // 表头两行
+  ws.mergeCells(3, 2, 4, 2); // 序号
+  ws.mergeCells(3, 3, 4, 3); // 材料名称
+  ws.mergeCells(3, 4, 3, 6); // 材料形成日期
+  ws.mergeCells(3, 7, 4, 7); // 页数
+  ws.mergeCells(3, 8, 4, 8); // 备注
+
+  ws.getCell(3, 2).value = "序号";
+  ws.getCell(3, 3).value = "材 料 名 称";
+  ws.getCell(3, 4).value = "材料形成日期";
+  ws.getCell(3, 7).value = "页数";
+  ws.getCell(3, 8).value = "备注";
+  ws.getCell(4, 4).value = "年";
+  ws.getCell(4, 5).value = "月";
+  ws.getCell(4, 6).value = "日";
+
+  styleRange(ws, 3, 2, 8, { bold: true, border: true });
+  styleRange(ws, 4, 2, 8, { bold: true, border: true });
+  ws.getRow(1).height = 28;
+  ws.getRow(2).height = 22;
+  ws.getRow(3).height = 20;
+  ws.getRow(4).height = 18;
+}
+
+function writeDataRow(
+  ws: ExcelJS.Worksheet,
+  row: number,
+  cols: Array<string | number>,
+  opts?: { bold?: boolean; nameLeft?: boolean }
+) {
+  for (let i = 0; i < 7; i++) {
+    const cell = ws.getCell(row, i + 2);
+    cell.value = cols[i] ?? "";
+    cell.font = {
+      name: "宋体",
+      bold: !!opts?.bold,
+      size: 11,
+    };
+    cell.alignment = {
+      vertical: "middle",
+      horizontal:
+        i === 1 && opts?.nameLeft
+          ? "left"
+          : ("center" as ExcelJS.Alignment["horizontal"]),
+      wrapText: true,
+    };
+    cell.border = BOX as ExcelJS.Borders;
+  }
+  ws.getRow(row).height = opts?.bold ? 20 : 18;
+}
+
+/**
+ * 按附件2制式生成目录：一件材料一行，含边框/加粗。
+ * 返回 xlsx Buffer。
+ */
+export async function buildCatalogWorkbookBuffer(
   personName: string,
   sorted: SortItem[]
-): XLSX.WorkBook {
+): Promise<Buffer> {
   const byCode = new Map(sorted.map((g) => [g.category, g.items]));
-  const aoa: (string | number)[][] = [];
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "档案管理智能体";
+  const ws = wb.addWorksheet("1", {
+    properties: { defaultRowHeight: 18 },
+    views: [{ showGridLines: false }],
+  });
 
-  aoa.push(["", "人事档案目录", "", "", "", "", "", ""]);
-  aoa.push(["", `姓名：${personName}`, "", "", "", "", "", ""]);
-  aoa.push(["", "序号", "材 料 名 称", "材料形成日期", "", "", "页数", "备注"]);
-  aoa.push(["", "", "", "年", "月", "日", "", ""]);
+  ws.getColumn(1).width = 2;
+  ws.getColumn(2).width = 10;
+  ws.getColumn(3).width = 42;
+  ws.getColumn(4).width = 6;
+  ws.getColumn(5).width = 5;
+  ws.getColumn(6).width = 5;
+  ws.getColumn(7).width = 6;
+  ws.getColumn(8).width = 10;
+
+  writeHeader(ws, personName);
+  let row = 5;
 
   for (const major of MAJOR) {
-    const hasAny = major.codes.some((c) => (byCode.get(c as never) || []).length);
+    const hasAny = major.codes.some(
+      (c) => (byCode.get(c as never) || []).length
+    );
     if (!hasAny) continue;
 
-    aoa.push(["", major.roman, major.title, "", "", "", "", ""]);
+    writeDataRow(ws, row, [major.roman, major.title, "", "", "", "", ""], {
+      bold: true,
+      nameLeft: true,
+    });
+    // 类标题：序号列+名称列视觉上成组，名称左对齐
+    ws.getCell(row, 3).alignment = {
+      vertical: "middle",
+      horizontal: "left",
+      wrapText: true,
+    };
+    row += 1;
 
     if (major.subs?.length) {
       for (const sub of major.subs) {
         const items = byCode.get(sub.code as never) || [];
         if (!items.length) continue;
-        aoa.push(["", sub.key, sub.title, "", "", "", "", ""]);
+        writeDataRow(ws, row, [sub.key, sub.title, "", "", "", "", ""], {
+          bold: true,
+          nameLeft: true,
+        });
+        row += 1;
         items.forEach((it, idx) => {
           const { y, m, d } = splitDate(it.formDate);
-          aoa.push([
-            "",
-            `${sub.key}-${idx + 1}`,
-            it.materialName,
-            y,
-            m,
-            d,
-            it.pageCount,
-            "",
-          ]);
+          writeDataRow(
+            ws,
+            row,
+            [
+              `${sub.key}-${idx + 1}`,
+              it.materialName || "",
+              y,
+              m,
+              d,
+              it.pageCount || "",
+              "",
+            ],
+            { nameLeft: true }
+          );
+          row += 1;
         });
       }
     } else {
@@ -113,35 +253,29 @@ export function buildCatalogWorkbook(
       const prefix = SIMPLE_PREFIX[code] || code;
       items.forEach((it, idx) => {
         const { y, m, d } = splitDate(it.formDate);
-        aoa.push([
-          "",
-          `${prefix}-${idx + 1}`,
-          it.materialName,
-          y,
-          m,
-          d,
-          it.pageCount,
-          "",
-        ]);
+        writeDataRow(
+          ws,
+          row,
+          [
+            `${prefix}-${idx + 1}`,
+            it.materialName || "",
+            y,
+            m,
+            d,
+            it.pageCount || "",
+            "",
+          ],
+          { nameLeft: true }
+        );
+        row += 1;
       });
     }
 
-    // 类与类之间留一空行，接近制式观感
-    aoa.push(emptyRow());
+    // 类之间空一行（带边框空白，贴近制式纸面）
+    writeDataRow(ws, row, ["", "", "", "", "", "", ""]);
+    row += 1;
   }
 
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [
-    { wch: 2 },
-    { wch: 10 },
-    { wch: 42 },
-    { wch: 6 },
-    { wch: 4 },
-    { wch: 4 },
-    { wch: 6 },
-    { wch: 10 },
-  ];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "1");
-  return wb;
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
 }

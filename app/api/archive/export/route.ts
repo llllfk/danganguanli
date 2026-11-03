@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import * as XLSX from "xlsx";
 import { getSortedGroups } from "@/lib/repos/archive";
-import { buildCatalogWorkbook } from "@/lib/repos/catalog-export";
+import { buildCatalogWorkbookBuffer } from "@/lib/repos/catalog-export";
 import { query } from "@/lib/db";
 
-/** 导出制式目录（对齐附件2：类标题 + 序号 + 年/月/日 + 页数） */
+/** 导出制式目录（对齐附件2：边框/加粗，一件一行） */
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json().catch(() => ({}))) as {
@@ -29,14 +28,12 @@ export async function POST(request: NextRequest) {
       personName = p.rows[0]?.person_name || personCode;
     }
 
-    const wb = buildCatalogWorkbook(personName, sorted);
-    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
-    const bytes = new Uint8Array(buf);
+    const buf = await buildCatalogWorkbookBuffer(personName, sorted);
     const filename = encodeURIComponent(
       `人事档案目录_${personName}_${personCode}.xlsx`
     );
 
-    return new NextResponse(bytes, {
+    return new NextResponse(new Uint8Array(buf), {
       status: 200,
       headers: {
         "Content-Type":

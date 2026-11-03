@@ -17,6 +17,7 @@
     "@aws-sdk/client-s3": "^3.750.0",
     "@coze/workload-identity": "^0.1.0",
     "busboy": "^1.6.0",
+    "exceljs": "^4.4.0",
     "jszip": "^3.10.2",
     "next": "^15.0.0",
     "pg": "^8.13.0",
