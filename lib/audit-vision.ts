@@ -364,10 +364,15 @@ async function maybeUpdatePieceTitle(
   piece: PageRow,
   title?: string
 ) {
-  const t = (title || "").trim();
-  if (!t || looksLikePlaceholderName(t)) return piece.material_name;
-  if (!looksLikePlaceholderName(piece.material_name || "")) {
+  const t = (title || "").trim().replace(/\s+/g, "");
+  if (!t || looksLikePlaceholderName(t, piece.material_no)) {
     return piece.material_name;
+  }
+  const cur = (piece.material_name || "").trim();
+  if (cur === t) return t;
+  // 已有正经题名则保留；占位名（含「档案材料 …」）一律可被视觉题名覆盖
+  if (cur && !looksLikePlaceholderName(cur, piece.material_no)) {
+    return cur;
   }
   await query(
     `UPDATE ordered_archive_pieces
@@ -383,6 +388,58 @@ async function maybeUpdatePieceTitle(
     [t, personCode, piece.material_no]
   );
   return t;
+}
+
+/** 出处里已有正经题名、件表仍是「档案材料 …」时回写左侧列表 */
+async function syncTitlesFromSources(personCode: string) {
+  await query(
+    `UPDATE ordered_archive_pieces p
+     SET material_name = s.title
+     FROM (
+       SELECT material_no,
+              min(material_name) AS title
+       FROM audit_field_sources
+       WHERE person_code = $1
+         AND nullif(trim(material_name), '') IS NOT NULL
+         AND material_name !~ '^[0-9]{4,}-'
+         AND material_name !~ '^档案材料'
+       GROUP BY material_no
+     ) s
+     WHERE p.person_code = $1
+       AND p.formal_no = s.material_no
+       AND (
+         p.material_name IS NULL
+         OR btrim(p.material_name) = ''
+         OR p.material_name ~ '^档案材料'
+         OR p.material_name = p.formal_no
+       )`,
+    [personCode]
+  );
+  await query(
+    `UPDATE archive_pieces p
+     SET material_name = s.title,
+         updated_at = CURRENT_TIMESTAMP
+     FROM (
+       SELECT material_no,
+              min(material_name) AS title
+       FROM audit_field_sources
+       WHERE person_code = $1
+         AND nullif(trim(material_name), '') IS NOT NULL
+         AND material_name !~ '^[0-9]{4,}-'
+         AND material_name !~ '^档案材料'
+       GROUP BY material_no
+     ) s
+     WHERE p.person_code = $1
+       AND (p.serial_no = s.material_no OR p.formal_no = s.material_no)
+       AND (
+         p.material_name IS NULL
+         OR btrim(p.material_name) = ''
+         OR p.material_name ~ '^档案材料'
+         OR p.material_name = p.serial_no
+         OR p.material_name = coalesce(p.formal_no, '')
+       )`,
+    [personCode]
+  );
 }
 
 async function insertFieldSources(
@@ -437,6 +494,7 @@ export async function ensureAuditSourcesByVision(
     [personCode]
   );
   if ((before.rows[0]?.n || 0) > 0 && !opts?.force) {
+    await syncTitlesFromSources(personCode).catch(() => undefined);
     return {
       extracted: 0,
       skipped: true,
@@ -550,6 +608,7 @@ export async function ensureAuditSourcesByVision(
   }
 
   if (!visionOk && fromCache === 0 && extracted === 0) {
+    await syncTitlesFromSources(personCode).catch(() => undefined);
     return {
       extracted: 0,
       skipped: true,
@@ -559,6 +618,8 @@ export async function ensureAuditSourcesByVision(
       pages: pages.length,
     };
   }
+
+  await syncTitlesFromSources(personCode).catch(() => undefined);
 
   return {
     extracted,

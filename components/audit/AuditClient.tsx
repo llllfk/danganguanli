@@ -272,6 +272,8 @@ export function AuditClient() {
       if (json.error) throw new Error(json.error);
       setReport(json.data.report);
       setLoaded(true);
+      // 核验可能已把视觉题名写回件表，刷新左侧列表
+      await loadMaterials(code, { keepReport: true });
       const rec = json.data.record;
       const note = json.data.visionNote || "";
       const texts = json.data.textCount;

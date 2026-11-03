@@ -113,7 +113,9 @@ export function looksLikePlaceholderName(name: string, serialNo = "") {
   if (!s) return true;
   if (serialNo && s === serialNo) return true;
   if (/^\d{4,}-L\d+/i.test(s)) return true;
-  if (/^档案材料\s*\d+/i.test(s)) return true;
+  // 审核有序件兜底名：档案材料 00001-0300-001
+  if (/^档案材料\b/i.test(s)) return true;
+  if (/^\d{4,}-\d{4}-\d{3,}(-\d{3,})?$/i.test(s)) return true;
   if (looksLikeFileName(s)) return true;
   return false;
 }
