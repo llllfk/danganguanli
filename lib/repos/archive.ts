@@ -608,6 +608,46 @@ export async function updateConfirmedCategory(
   );
 }
 
+/** 手动修正材料题名 / 形成日期 */
+export async function updatePieceMeta(
+  personCode: string,
+  serialNo: string,
+  patch: { materialName?: string; formDate?: string | null }
+) {
+  const { normalizeOneDate } = await import("@/lib/vision-meta");
+  const sets: string[] = ["updated_at = CURRENT_TIMESTAMP"];
+  const params: unknown[] = [];
+  let i = 1;
+
+  if (patch.materialName !== undefined) {
+    sets.push(`material_name = $${i++}`);
+    params.push(patch.materialName.trim() || null);
+  }
+  if (patch.formDate !== undefined) {
+    const raw = (patch.formDate || "").trim();
+    let date: string | null = null;
+    if (raw) {
+      date = normalizeOneDate(raw);
+      if (!date && /^\d{4}-\d{2}-\d{2}$/.test(raw)) date = raw;
+      if (!date) {
+        throw new Error("形成日期格式无效，请用 YYYY-MM-DD 或 2020年1月1日");
+      }
+    }
+    sets.push(`form_date = $${i++}`);
+    params.push(date);
+  }
+
+  if (params.length === 0) return;
+
+  params.push(personCode, serialNo);
+  await query(
+    `UPDATE archive_pieces
+     SET ${sets.join(", ")}
+     WHERE person_code = $${i++} AND serial_no = $${i}`,
+    params
+  );
+}
+
 const PARTY_ORDER = [
   "入团志愿书",
   "入团申请书",

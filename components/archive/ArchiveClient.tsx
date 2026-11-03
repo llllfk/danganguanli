@@ -331,6 +331,57 @@ export function ArchiveClient() {
     }
   }
 
+  async function onSavePieceMeta(
+    piece: ArchivePiece,
+    patch: { materialName?: string; formDate?: string }
+  ) {
+    const nextName =
+      patch.materialName !== undefined
+        ? patch.materialName.trim()
+        : (piece.materialName || "").trim();
+    const nextDate =
+      patch.formDate !== undefined
+        ? patch.formDate.trim()
+        : (piece.formDate || "").trim();
+    const sameName = nextName === (piece.materialName || "").trim();
+    const sameDate = nextDate === (piece.formDate || "").trim();
+    if (
+      (patch.materialName === undefined || sameName) &&
+      (patch.formDate === undefined || sameDate)
+    ) {
+      return;
+    }
+    setError("");
+    try {
+      const body: Record<string, string> = {
+        personCode,
+        serialNo: piece.serialNo,
+      };
+      if (patch.materialName !== undefined && !sameName) {
+        body.materialName = nextName;
+      }
+      if (patch.formDate !== undefined && !sameDate) {
+        body.formDate = nextDate;
+      }
+      const res = await fetch("/api/archive/pieces", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await readJson(res);
+      if (json.error) throw new Error(String(json.error));
+      const list = (json.data as ArchivePiece[]) || [];
+      setPieces(list);
+      setSorted(null);
+      if (preview?.serialNo === piece.serialNo) {
+        setPreview(list.find((x) => x.serialNo === piece.serialNo) || null);
+      }
+      setTip(`已保存 ${piece.serialNo} 的材料信息`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "保存失败");
+    }
+  }
+
   async function onSort() {
     if (!classifiedPieces.length) return;
     setBusy("sort");
@@ -685,11 +736,47 @@ export function ArchiveClient() {
                         <td className="px-2 py-3 text-center text-[#1f2937]">
                           {p.serialNo}
                         </td>
-                        <td className="px-2 py-3 text-[#1f2937]">
-                          {p.materialName || "-"}
+                        <td className="px-2 py-2 text-[#1f2937]">
+                          <input
+                            type="text"
+                            defaultValue={p.materialName || ""}
+                            key={`${p.serialNo}-name-${p.materialName || ""}`}
+                            disabled={!!busy}
+                            placeholder="材料名称"
+                            title="修改后失焦保存"
+                            className="w-full min-w-[8rem] h-8 rounded border border-[#c5d8ef] bg-white px-2 text-[13px] text-[#1f2937] outline-none focus:border-[#4a9eff] disabled:opacity-50"
+                            onBlur={(e) =>
+                              void onSavePieceMeta(p, {
+                                materialName: e.target.value,
+                              })
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                (e.target as HTMLInputElement).blur();
+                              }
+                            }}
+                          />
                         </td>
-                        <td className="px-2 py-3 text-center text-[#475569]">
-                          {p.formDate || "-"}
+                        <td className="px-2 py-2 text-center text-[#475569]">
+                          <input
+                            type="text"
+                            defaultValue={p.formDate || ""}
+                            key={`${p.serialNo}-date-${p.formDate || ""}`}
+                            disabled={!!busy}
+                            placeholder="YYYY-MM-DD"
+                            title="形成日期，失焦保存"
+                            className="w-full h-8 rounded border border-[#c5d8ef] bg-white px-1 text-center text-[12px] text-[#334155] outline-none focus:border-[#4a9eff] disabled:opacity-50"
+                            onBlur={(e) =>
+                              void onSavePieceMeta(p, {
+                                formDate: e.target.value,
+                              })
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                (e.target as HTMLInputElement).blur();
+                              }
+                            }}
+                          />
                         </td>
                         <td className="px-2 py-3 text-center text-[#475569]">
                           {p.pageCount}
@@ -858,8 +945,35 @@ export function ArchiveClient() {
       >
         {preview ? (
           <div className="space-y-3 text-sm">
-            <p>材料名称：{preview.materialName || "-"}</p>
-            <p>形成日期：{preview.formDate || "-"}</p>
+            <label className="flex items-center gap-2">
+              <span className="shrink-0 text-[#64748b] w-[4.5rem]">材料名称</span>
+              <input
+                type="text"
+                key={`prev-name-${preview.serialNo}-${preview.materialName || ""}`}
+                defaultValue={preview.materialName || ""}
+                disabled={!!busy}
+                className="flex-1 h-9 rounded-md border border-[#c5d8ef] px-2 outline-none focus:border-[#4a9eff]"
+                onBlur={(e) =>
+                  void onSavePieceMeta(preview, {
+                    materialName: e.target.value,
+                  })
+                }
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="shrink-0 text-[#64748b] w-[4.5rem]">形成日期</span>
+              <input
+                type="text"
+                key={`prev-date-${preview.serialNo}-${preview.formDate || ""}`}
+                defaultValue={preview.formDate || ""}
+                disabled={!!busy}
+                placeholder="YYYY-MM-DD"
+                className="flex-1 h-9 rounded-md border border-[#c5d8ef] px-2 outline-none focus:border-[#4a9eff]"
+                onBlur={(e) =>
+                  void onSavePieceMeta(preview, { formDate: e.target.value })
+                }
+              />
+            </label>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[#7b8da0]">页：</span>
               {Array.from({ length: preview.pageCount || 1 }, (_, i) => i + 1).map(
