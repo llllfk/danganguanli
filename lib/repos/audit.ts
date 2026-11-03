@@ -264,37 +264,85 @@ export async function runAuditFromDb(
   };
 }
 
+/** 去掉书名号/空白，便于「干部履历表」匹配「《干部履历表》」等 */
+function normMaterialText(s: string) {
+  return String(s || "")
+    .replace(/[《》〈〉【】\[\]（）()\s　]/g, "")
+    .toLowerCase();
+}
+
+function nameHitsPattern(names: string[], pattern: string) {
+  const p = normMaterialText(pattern);
+  if (!p) return false;
+  return names.some((n) => normMaterialText(n).includes(p));
+}
+
+/**
+ * 完整性：有序件 + 乱序件题名并集，并并入比对出处中的材料名
+ * （避免左侧已有「干部履历表」、出处也能引用，却因旧报告/单表漏检而误报缺失）
+ */
 async function checkCompleteness(
   personCode: string
 ): Promise<CompletenessIssue[]> {
-  // 完整性对照有序档案（附件6）；无则对照乱序件
-  let mats = await query<{ material_name: string | null; form_date: string | null }>(
-    `SELECT material_name, form_date FROM ordered_archive_pieces WHERE person_code = $1`,
-    [personCode]
-  );
-  if (!mats.rows.length) {
-    mats = await query<{ material_name: string | null; form_date: string | null }>(
+  const [ordered, archive, sources, reqs] = await Promise.all([
+    query<{ material_name: string | null; form_date: string | null }>(
+      `SELECT material_name, form_date FROM ordered_archive_pieces WHERE person_code = $1`,
+      [personCode]
+    ),
+    query<{ material_name: string | null; form_date: string | null }>(
       `SELECT material_name, form_date FROM archive_pieces WHERE person_code = $1`,
       [personCode]
-    );
-  }
-  const names = mats.rows.map((m) => m.material_name || "").join("||");
+    ),
+    query<{ material_name: string | null }>(
+      `SELECT DISTINCT material_name FROM audit_field_sources WHERE person_code = $1`,
+      [personCode]
+    ),
+    query<{
+      category_hint: string;
+      material_pattern: string;
+      description: string;
+      required_for: string | null;
+    }>(
+      `SELECT category_hint, material_pattern, description, required_for
+       FROM completeness_requirements
+       ORDER BY sort_order`
+    ),
+  ]);
 
-  const reqs = await query<{
-    category_hint: string;
-    material_pattern: string;
-    description: string;
-  }>(
-    `SELECT category_hint, material_pattern, description
-     FROM completeness_requirements
-     ORDER BY sort_order`
+  // 日期连续性仍以「展示用」件表为准：有序优先，否则乱序
+  const dateRows = ordered.rows.length ? ordered.rows : archive.rows;
+  const nameList = [
+    ...ordered.rows.map((m) => m.material_name || ""),
+    ...archive.rows.map((m) => m.material_name || ""),
+    ...sources.rows.map((m) => m.material_name || ""),
+  ].filter(Boolean);
+
+  const blob = nameList.map(normMaterialText).join("|");
+  const isParty =
+    /入党|转正申请|中共|共产党员/.test(blob) ||
+    nameHitsPattern(nameList, "入党志愿书") ||
+    nameHitsPattern(nameList, "入党申请书");
+  const isBachelorPlus = /本科|硕士|博士|学士|学位授予|高等学校毕业生/.test(
+    blob
   );
+  const isTitled = /专业技术资格|职称|专业技术职务/.test(blob);
+
+  function applies(requiredFor: string | null | undefined) {
+    const r = (requiredFor || "all").trim().toLowerCase();
+    if (!r || r === "all") return true;
+    if (r === "party") return isParty;
+    if (r === "bachelor+" || r === "bachelor") return isBachelorPlus;
+    if (r === "titled") return isTitled;
+    return true;
+  }
 
   const issues: CompletenessIssue[] = [];
   for (const req of reqs.rows) {
+    if (!applies(req.required_for)) continue;
+
     if (req.material_pattern === "年度考核") {
-      const years = mats.rows
-        .filter((m) => (m.material_name || "").includes("年度考核"))
+      const years = dateRows
+        .filter((m) => nameHitsPattern([m.material_name || ""], "年度考核"))
         .map((m) => (m.form_date || "").slice(0, 4))
         .filter(Boolean)
         .map(Number)
@@ -319,7 +367,7 @@ async function checkCompleteness(
       continue;
     }
 
-    if (!names.includes(req.material_pattern)) {
+    if (!nameHitsPattern(nameList, req.material_pattern)) {
       issues.push({
         category: req.category_hint,
         message: req.description,
@@ -327,6 +375,17 @@ async function checkCompleteness(
     }
   }
   return issues;
+}
+
+/** 用当前库材料重算报告中的完整性（加载旧报告时防误报） */
+export async function refreshReportCompleteness(
+  report: AuditReport
+): Promise<AuditReport> {
+  const completeness = await checkCompleteness(report.personCode);
+  return {
+    ...report,
+    completeness,
+  };
 }
 
 export function summarizeAudit(report: AuditReport) {

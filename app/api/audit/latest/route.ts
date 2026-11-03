@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { countPageTexts } from "@/lib/repos/page-texts";
 import { countAuditSources } from "@/lib/repos/audit-upload";
+import {
+  refreshReportCompleteness,
+  summarizeAudit,
+} from "@/lib/repos/audit";
 import { getLatestAuditRecord } from "@/lib/store";
 
 export async function GET(request: NextRequest) {
@@ -18,10 +22,22 @@ export async function GET(request: NextRequest) {
       countAuditSources(personCode),
       countPageTexts(personCode),
     ]);
+
+    let report = record?.report || null;
+    if (report?.personCode) {
+      report = await refreshReportCompleteness(report);
+      if (record) {
+        const { issueCount, summary } = summarizeAudit(report);
+        record.report = report;
+        record.issueCount = issueCount;
+        record.summary = summary;
+      }
+    }
+
     return NextResponse.json({
       data: {
         record,
-        report: record?.report || null,
+        report,
         sourceCount,
         textCount,
       },
