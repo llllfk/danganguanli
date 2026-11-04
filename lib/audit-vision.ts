@@ -5,6 +5,7 @@
  * - 优先复用 archive_page_texts；字段写入 audit_field_sources
  */
 import { query } from "@/lib/db";
+import { auditUploadTitleCorrection } from "@/lib/audit-upload-catalog";
 import {
   isCozeVisionConfigured,
   uploadCozeFile,
@@ -71,7 +72,8 @@ function buildPrompt(pageCount: number, materialName: string) {
 请通读全部页面，抽取可用于信息比对的具体记载（不要只返回文件名/件号），某页看不清则从其它页补；确实没有则省略该键。只输出一行 JSON：
 {"materialTitle":"材料正文题名","name":"姓名","birth":"出生日期YYYY-MM-DD","work":"参加工作时间YYYY-MM-DD","party":"入党时间YYYY-MM-DD","education":"学历","degree":"学位","experience":"工作经历摘要","recognition":"组织认定摘要","pageText":"各页关键文字摘要合并，400字内"}
 规则：
-- materialTitle：材料题名/表名，禁止用文件名、流水号
+- materialTitle：优先读取第一页顶部印刷的材料题名/表名，原样提取；禁止用文件名、流水号
+- 若正文出现「表彰决定」等内容，不能用正文事项替代第一页顶部实际印刷的表名
 - name/birth/work/party/education/degree/experience/recognition：必须是材料内写明的具体值，用于跨材料比对
 - 日期统一 YYYY-MM-DD；禁止编造`;
 }
@@ -414,7 +416,8 @@ function groupByPiece(pages: PageRow[]): PageRow[][] {
 async function maybeUpdatePieceTitle(
   personCode: string,
   piece: PageRow,
-  title?: string
+  title?: string,
+  replaceKnownWrongTitle = false
 ) {
   const t = (title || "").trim().replace(/\s+/g, "");
   if (!t || looksLikePlaceholderName(t, piece.material_no)) {
@@ -423,7 +426,11 @@ async function maybeUpdatePieceTitle(
   const cur = (piece.material_name || "").trim();
   if (cur === t) return t;
   // 已有正经题名则保留；占位名（含「档案材料 …」）一律可被视觉题名覆盖
-  if (cur && !looksLikePlaceholderName(cur, piece.material_no)) {
+  if (
+    cur &&
+    !looksLikePlaceholderName(cur, piece.material_no) &&
+    !replaceKnownWrongTitle
+  ) {
     return cur;
   }
   await query(
@@ -668,11 +675,17 @@ async function resolveSourceTitle(
   materialTitle?: string,
   rawHint?: string
 ): Promise<string> {
+  const knownTitle = auditUploadTitleCorrection(piece.material_no);
   const guessed = guessTitleFromRaw(rawHint || "");
-  for (const cand of [materialTitle, guessed]) {
+  for (const cand of [knownTitle, materialTitle, guessed]) {
     const t = cleanTitle(cand);
     if (!t) continue;
-    const written = await maybeUpdatePieceTitle(personCode, piece, t);
+    const written = await maybeUpdatePieceTitle(
+      personCode,
+      piece,
+      t,
+      !!knownTitle
+    );
     if (written && !looksLikePlaceholderName(written, piece.material_no)) {
       return written;
     }

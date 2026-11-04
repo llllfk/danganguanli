@@ -1,4 +1,5 @@
 import { query } from "@/lib/db";
+import { auditUploadTitleCorrection } from "@/lib/audit-upload-catalog";
 import {
   guessTitleFromRaw,
   looksLikePlaceholderName,
@@ -148,9 +149,10 @@ export async function getPersonMaterials(
         looksLikePlaceholderName(raw, row.formal_no)
           ? titles.get(row.formal_no)
           : undefined;
+      const scannedTitle = auditUploadTitleCorrection(row.formal_no);
       return {
         category: row.category_code,
-        materialName: better || raw,
+        materialName: scannedTitle || better || raw,
         imageNames: row.image_names,
         serialNo: row.formal_no,
         pageCount: row.page_count,
@@ -160,7 +162,7 @@ export async function getPersonMaterials(
     });
   }
 
-  const r = await query<{
+  const archive = await query<{
     confirmed_category: string | null;
     suggested_category: string | null;
     material_name: string | null;
@@ -178,9 +180,10 @@ export async function getPersonMaterials(
      ORDER BY COALESCE(formal_no, serial_no)`,
     [personCode]
   );
-  const refs = r.rows.map((row) => row.formal_no || row.serial_no);
+
+  const refs = archive.rows.map((row) => row.formal_no || row.serial_no);
   const titles = await resolveDisplayTitles(personCode, refs);
-  return r.rows.map((row) => {
+  return archive.rows.map((row) => {
     const ref = row.formal_no || row.serial_no;
     const raw = row.material_name || "";
     const better =

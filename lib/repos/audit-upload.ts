@@ -1,49 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { query } from "@/lib/db";
-import { formalSuffix } from "@/lib/audit-parse";
-
-type CatalogHit = {
-  materialName: string;
-  formDate?: string;
-  summary?: string;
-  category: string;
-};
-
-let bySuffix: Map<string, CatalogHit> | null = null;
-
-function loadCatalogMap() {
-  if (bySuffix) return bySuffix;
-  bySuffix = new Map();
-  const p = path.join(process.cwd(), "scripts", "seed", "ordered-pieces.json");
-  if (!fs.existsSync(p)) return bySuffix;
-  const raw = JSON.parse(fs.readFileSync(p, "utf8")) as Array<{
-    formalNo: string;
-    category: string;
-    materialName: string;
-    formDate?: string;
-    summary?: string;
-  }>;
-  for (const r of raw) {
-    bySuffix.set(formalSuffix(r.formalNo), {
-      materialName: r.materialName,
-      formDate: r.formDate,
-      summary: r.summary,
-      category: r.category,
-    });
-  }
-  return bySuffix;
-}
-
-function lookupCatalog(formalNo: string, categoryCode: string): CatalogHit | null {
-  const map = loadCatalogMap();
-  const hit = map.get(formalSuffix(formalNo));
-  if (hit) return hit;
-  for (const v of map.values()) {
-    if (v.category === categoryCode) return v;
-  }
-  return null;
-}
+import {
+  auditUploadCatalogEntry,
+  auditUploadTitleCorrection,
+} from "@/lib/audit-upload-catalog";
 
 export async function ensurePerson(personCode: string, personName?: string) {
   await query(
@@ -76,10 +35,13 @@ export async function replaceOrderedPieces(
 
   let sort = opts?.sortStart ?? 0;
   for (const piece of pieces) {
-    const cat = lookupCatalog(piece.formalNo, piece.categoryCode);
-    const materialName = cat?.materialName || `档案材料 ${piece.formalNo}`;
-    const formDate = cat?.formDate || null;
-    const summary = cat?.summary || null;
+    const catalog = auditUploadCatalogEntry(piece.formalNo, piece.categoryCode);
+    const materialName =
+      auditUploadTitleCorrection(piece.formalNo) ||
+      catalog?.materialName ||
+      `档案材料 ${piece.formalNo}`;
+    const formDate = catalog?.formDate || null;
+    const summary = catalog?.summary || null;
 
     const existing = await query<{ id: string; page_count: number }>(
       `SELECT id::text, page_count FROM ordered_archive_pieces

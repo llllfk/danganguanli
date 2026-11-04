@@ -586,10 +586,10 @@ export function AuditClient() {
                                   type="button"
                                   onClick={() => openPreview(x)}
                                   className="w-full flex items-center gap-2 px-3 py-2 border-b border-[#eef2f7] last:border-0 text-left hover:bg-[#eef6fe] transition"
-                                  title={auditMaterialLabel(x.materialName, x.imageNames, pieceRefOf(x))}
+                                  title={auditMaterialLabel(x.materialName, pieceRefOf(x))}
                                 >
                                   <span className="flex-1 min-w-0 text-[13px] text-[#1f2937] break-words whitespace-normal">
-                                    {auditMaterialLabel(x.materialName, x.imageNames, pieceRefOf(x))}
+                                    {auditMaterialLabel(x.materialName, pieceRefOf(x))}
                                   </span>
                                   <span className="text-[12px] text-[#6b7a8f] shrink-0">
                                     {x.pageCount}页
@@ -840,7 +840,7 @@ export function AuditClient() {
         {preview ? (
           <div className="space-y-3 text-sm">
             <p className="text-[#1f2937]">
-              {auditMaterialLabel(preview.materialName, preview.imageNames?.slice(previewPage - 1, previewPage), pieceRefOf(preview))}
+              {auditMaterialLabel(preview.materialName, pieceRefOf(preview))}
             </p>
             <p className="text-[#7b8da0]">
               {preview.source === "unordered" ? "整编件" : "有序件"} ·{" "}

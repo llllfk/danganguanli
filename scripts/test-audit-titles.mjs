@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import fs from "node:fs";
+import path from "node:path";
 
 function loadModule(file, dependencies = {}) {
   const context = {
@@ -16,7 +18,11 @@ function loadModule(file, dependencies = {}) {
   };
   const source = readFileSync(new URL(file, import.meta.url), "utf8");
   const { outputText } = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
   });
   vm.runInNewContext(outputText, context, { filename: file });
   return context;
@@ -31,6 +37,10 @@ function loadAudit(query) {
     "@/lib/repos/page-texts": {},
     "@/lib/storage": {},
     "@/lib/vision-meta": meta,
+    "@/lib/audit-upload-catalog": {
+      auditUploadTitleCorrection: (formalNo) =>
+        formalNo === "00001-0700-001" ? "先进个人审批表" : undefined,
+    },
   });
 }
 
@@ -76,4 +86,59 @@ test("a recognized real title is not overwritten by a later conflicting extracti
   }, "年度考核登记表");
   assert.equal(result, "干部履历表");
   assert.equal(calls, 0);
+});
+
+test("verified audit scan title corrects the known bad 0700 demo title", async () => {
+  const updates = [];
+  const audit = loadAudit(async (sql, params) => {
+    updates.push({ sql, params });
+    return { rows: [], rowCount: 1 };
+  });
+  const result = await audit.resolveSourceTitle("00001", {
+    material_name: "表彰决定",
+    material_no: "00001-0700-001",
+    form_date: null,
+    file_path: null,
+    file_name: "00001-0700-001-001.jpg",
+    page_no: 1,
+  }, "表彰决定");
+  assert.equal(result, "先进个人审批表");
+  assert.equal(updates.length, 2);
+  for (const update of updates) {
+    assert.equal(update.params[0], "先进个人审批表");
+  }
+});
+
+test("audit list shows one formal piece number rather than every page filename", () => {
+  const label = loadModule("../lib/audit-label.ts", {
+    "@/lib/vision-meta": meta,
+  }).exports.auditMaterialLabel;
+  assert.equal(
+    label("先进个人审批表", "00001-0700-001"),
+    "先进个人审批表 00001-0700-001"
+  );
+  assert.equal(
+    label("档案材料 00001-0700-001", "00001-0700-001"),
+    "00001-0700-001"
+  );
+});
+
+test("audit upload uses the verified scanned title only for its exact formal number", () => {
+  const catalog = loadModule("../lib/audit-upload-catalog.ts", {
+    "node:fs": fs,
+    "node:path": path,
+    "@/lib/audit-parse": {
+      formalSuffix: (formalNo) => formalNo.split("-").slice(1).join("-"),
+    },
+  }).exports;
+  assert.equal(
+    catalog.auditUploadTitleCorrection("00001-0700-001"),
+    "先进个人审批表"
+  );
+  assert.equal(catalog.auditUploadTitleCorrection("00002-0700-001"), undefined);
+  assert.equal(catalog.auditUploadTitleCorrection("00001-0700-002"), undefined);
+  assert.equal(
+    catalog.auditUploadCatalogEntry("00001-0600-003", "0600").materialName,
+    "入党志愿书"
+  );
 });
