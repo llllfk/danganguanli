@@ -272,7 +272,7 @@ export function AuditClient() {
       } else if (opts?.forceVision) {
         setTip(`正在强制重读影像并核验 ${code}（较慢）…`);
       } else {
-        setTip(`正在检验人员 ${code}（优先复用已有出处/页文本）…`);
+        setTip(`正在检验人员 ${code}（逐件检查题名，补识别未完成材料）…`);
       }
       const res = await fetch("/api/audit/verify", {
         method: "POST",
@@ -627,7 +627,7 @@ export function AuditClient() {
             </button>
             <p className="text-[11px] text-[#7b8da0] text-center leading-relaxed">
               {report
-                ? "已有报告可直接查看；再点将用已有出处快速重算（不读图）"
+                ? "再次检验将复用已完成识别，重试缺失题名和未完成材料"
                 : "首次会识别材料并生成报告；之后选人自动带出上次结果"}
             </p>
           </div>

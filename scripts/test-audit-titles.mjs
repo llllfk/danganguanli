@@ -3,33 +3,27 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
-import fs from "node:fs";
-import path from "node:path";
 
-function loadModule(file, dependencies = {}) {
+function loadModule(file, dependencies = {}, globals = {}) {
   const context = {
-    exports: {},
-    process,
-    console,
+    exports: {}, process, console, Buffer, ...globals,
     require(name) {
       if (!(name in dependencies)) throw new Error(`Unexpected import: ${name}`);
       return dependencies[name];
     },
   };
-  const source = readFileSync(new URL(file, import.meta.url), "utf8");
-  const { outputText } = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-  });
+  const { outputText } = ts.transpileModule(
+    readFileSync(new URL(file, import.meta.url), "utf8"),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022, esModuleInterop: true } }
+  );
   vm.runInNewContext(outputText, context, { filename: file });
   return context;
 }
 
 const meta = loadModule("../lib/vision-meta.ts").exports;
-function loadAudit(query) {
+const titles = loadModule("../lib/audit-title.ts", { "@/lib/vision-meta": meta }).exports;
+function loadAudit(query, dependencies = {}, globals = {}) {
   return loadModule("../lib/audit-vision.ts", {
     "@/lib/db": { query },
     "@/lib/coze-vision": {},
@@ -37,134 +31,168 @@ function loadAudit(query) {
     "@/lib/repos/page-texts": {},
     "@/lib/storage": {},
     "@/lib/vision-meta": meta,
-    "@/lib/audit-upload-catalog": {
-      auditUploadTitleCorrection: (formalNo) =>
-        formalNo === "00001-0700-001" ? "先进个人审批表" : undefined,
-    },
-  });
+    "@/lib/audit-title": titles,
+    ...dependencies,
+  }, globals);
 }
 
-test("Chinese placeholder names are replaceable; real document titles are preserved", () => {
-  for (const title of ["档案材料 00001-0300-003", "档案材料00001-0300-003", "档案材料"]) {
-    assert.equal(meta.looksLikePlaceholderName(title), true, title);
+test("placeholder and missing-title markers are rejected without removing real title text", () => {
+  for (const name of ["档案材料 00001-0300-003", "00001-0300-003", "未识别", "未知"]) {
+    assert.equal(titles.cleanAuditTitle(name), undefined);
   }
-  for (const title of ["专业技术人员年度考核评价表（1994年度）", "档案材料登记表"]) {
-    assert.equal(meta.looksLikePlaceholderName(title), false, title);
-  }
+  assert.equal(titles.cleanAuditTitle(" G 省就业人员登记表 "), "G 省就业人员登记表");
 });
 
-test("Coze choices wrapper retains materialTitle and uses it for piece names and all field sources", async () => {
-  const calls = [];
-  const audit = loadAudit(async (sql, params) => {
-    calls.push({ sql, params });
-    return { rows: [], rowCount: 1 };
-  });
+test("wrapped Coze answer uses explicit title and never a title mentioned only in the body", () => {
+  const audit = loadAudit(async () => ({ rows: [] }));
   const title = "专业技术人员年度考核评价表（1994年度）";
-  const answer = JSON.stringify({ choices: [{ message: { content: JSON.stringify({
-    materialTitle: title, name: "张三", birth: "1968-01-01", education: "大学本科", pageText: "姓名张三",
-  }) } }] });
-  const result = audit.parseVisionAnswer(answer);
+  const result = audit.parseVisionAnswer(JSON.stringify({ choices: [{ message: {
+    content: JSON.stringify({ materialTitle: title, name: "张三", pageText: "参照《干部履历表》" }),
+  } }] }));
   assert.equal(result.materialTitle, title);
   assert.equal(result.fields.name, "张三");
-  const count = await audit.insertFieldSources("00001", {
-    material_name: "档案材料 00001-0300-003", material_no: "00001-0300-003", form_date: null,
-  }, result.fields, result.materialTitle, result.raw);
-  assert.equal(count, 3);
-  const updates = calls.filter(c => c.sql.includes("SET material_name"));
-  assert.equal(updates.length, 2);
-  for (const call of updates) assert.equal(call.params[0], title);
-  const inserts = calls.filter(c => c.sql.includes("INSERT INTO audit_field_sources"));
-  assert.equal(inserts.length, 3);
-  for (const call of inserts) assert.equal(call.params[3], title);
+  assert.equal(audit.parseVisionAnswer(JSON.stringify({ pageText: "参照《干部任免审批表》" })).materialTitle, undefined);
 });
 
-test("a recognized real title is not overwritten by a later conflicting extraction", async () => {
-  let calls = 0;
-  const audit = loadAudit(async () => { calls++; return { rows: [] }; });
-  const result = await audit.maybeUpdatePieceTitle("00001", {
-    material_name: "干部履历表", material_no: "00001-0100-001",
-  }, "年度考核登记表");
-  assert.equal(result, "干部履历表");
-  assert.equal(calls, 0);
-});
-
-test("Coze title overrides the old and verified fallback titles", async () => {
-  const updates = [];
+test("new Coze title replaces a real-looking legacy name without changing archive records", async () => {
+  const calls = [];
   const audit = loadAudit(async (sql, params) => {
-    updates.push({ sql, params });
+    calls.push({ sql, params }); return { rows: [], rowCount: 1 };
+  });
+  const title = await audit.resolveSourceTitle("00001", {
+    material_no: "00001-0902-001", material_name: "干部任免审批表",
+  }, "劳动合同书");
+  assert.equal(title, "劳动合同书");
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /UPDATE ordered_archive_pieces/);
+  assert.equal(calls[0].params[0], "劳动合同书");
+});
+
+test("audit labels remain at piece level", () => {
+  const label = loadModule("../lib/audit-label.ts", { "@/lib/vision-meta": meta }).exports.auditMaterialLabel;
+  assert.equal(label("先进个人审批表", "00001-0700-001"), "先进个人审批表 00001-0700-001");
+  assert.equal(label("档案材料 00001-0300-001", "00001-0300-001"), "00001-0300-001");
+});
+
+function pipelineHarness(documents, initialCache = new Map()) {
+  const calls = [], prompts = [], chats = new Map(), cache = new Map(initialCache);
+  const sources = new Map(documents.map((d) => [d.ref, "old source"]));
+  const pages = documents.map((d) => ({ material_no: d.ref, material_name: d.oldTitle,
+    file_path: `image/${d.ref}.jpg`, file_name: `${d.ref}-001.jpg`, page_no: 1, form_date: null }));
+  const audit = loadAudit(async (sql, params) => {
+    calls.push({ sql, params });
+    if (sql.includes("JOIN ordered_archive_pages pg") && sql.startsWith("SELECT")) return { rows: pages };
+    if (sql.includes("DELETE FROM audit_field_sources")) sources.delete(params[1]);
+    if (sql.includes("INSERT INTO audit_field_sources")) sources.set(params[5], params[3]);
     return { rows: [], rowCount: 1 };
-  });
-  const result = await audit.resolveSourceTitle("00001", {
-    material_name: "表彰决定",
-    material_no: "00001-0700-001",
-    form_date: null,
-    file_path: null,
-    file_name: "00001-0700-001-001.jpg",
-    page_no: 1,
-  }, "年度优秀员工审批表", "第一页标题：年度优秀员工审批表", true);
-  assert.equal(result, "年度优秀员工审批表");
-  assert.equal(updates.length, 2);
-  for (const update of updates) {
-    assert.equal(update.params[0], "年度优秀员工审批表");
-  }
-});
-
-test("verified title remains a fallback when Coze does not return a title", async () => {
-  const audit = loadAudit(async () => ({ rows: [], rowCount: 1 }));
-  const result = await audit.resolveSourceTitle("00001", {
-    material_name: "表彰决定",
-    material_no: "00001-0700-001",
-    form_date: null,
-    file_path: null,
-    file_name: "00001-0700-001-001.jpg",
-    page_no: 1,
-  });
-  assert.equal(result, "先进个人审批表");
-});
-
-test("cached titles do not replace a valid title without a new vision result", async () => {
-  const audit = loadAudit(async () => ({ rows: [], rowCount: 1 }));
-  const result = await audit.resolveSourceTitle("00001", {
-    material_name: "干部履历表",
-    material_no: "00001-0100-001",
-    form_date: null,
-    file_path: null,
-    file_name: "00001-0100-001-001.jpg",
-    page_no: 1,
-  }, "职工履历表", "职工履历表", false);
-  assert.equal(result, "干部履历表");
-});
-
-test("audit list shows one formal piece number rather than every page filename", () => {
-  const label = loadModule("../lib/audit-label.ts", {
-    "@/lib/vision-meta": meta,
-  }).exports.auditMaterialLabel;
-  assert.equal(
-    label("先进个人审批表", "00001-0700-001"),
-    "先进个人审批表 00001-0700-001"
-  );
-  assert.equal(
-    label("档案材料 00001-0700-001", "00001-0700-001"),
-    "00001-0700-001"
-  );
-});
-
-test("audit upload uses the verified scanned title only for its exact formal number", () => {
-  const catalog = loadModule("../lib/audit-upload-catalog.ts", {
-    "node:fs": fs,
-    "node:path": path,
-    "@/lib/audit-parse": {
-      formalSuffix: (formalNo) => formalNo.split("-").slice(1).join("-"),
+  }, {
+    "@/lib/coze-vision": { isCozeVisionConfigured: () => true, uploadCozeFile: async (_b, name) => name },
+    "@/lib/coze-env": { cozeApiBase: () => "https://coze.test", cozeApiToken: () => "test", visionBotId: () => "test" },
+    "@/lib/repos/page-texts": {
+      getPageText: async (_p, ref) => cache.get(ref),
+      upsertPageText: async (row) => cache.set(row.pieceRef, { materialName: row.materialName,
+        fields: row.fields, textContent: row.textContent, source: row.source, filePath: row.filePath }),
     },
+    "@/lib/storage": { getObjectBytes: async (filePath) => {
+      const doc = documents.find((d) => filePath.includes(d.ref));
+      if (doc.fail) throw new Error("cannot read scan");
+      return Buffer.from("test image");
+    } },
+  }, {
+    console: { info() {}, warn() {} },
+    fetch: async (url, init) => {
+      if (url.endsWith("/v3/chat")) {
+        const body = JSON.parse(init.body);
+        const content = JSON.parse(body.additional_messages[0].content);
+        prompts.push(content[0].text);
+        const doc = documents.find((d) => content.some((p) => p.file_id?.includes(d.ref)));
+        chats.set(doc.ref, doc);
+        return { json: async () => ({ code: 0, data: { id: doc.ref, conversation_id: doc.ref, status: "completed" } }) };
+      }
+      const doc = chats.get(new URL(url).searchParams.get("chat_id"));
+      return { json: async () => ({ data: [{ role: "assistant", type: "answer", content: JSON.stringify({
+        materialTitle: doc.title, pageText: "扫描页文字", ...(doc.fields || {}),
+      }) }] }) };
+    },
+  });
+  return { audit: audit.exports, cache, calls, sources, prompts };
+}
+
+const categoryDocs = [
+  { ref: "00001-0200-001", oldTitle: "档案材料 00001-0200-001", title: "自传" },
+  { ref: "00001-0300-001", oldTitle: "档案材料 00001-0300-001", title: "年度考核登记表" },
+  { ref: "00001-0902-001", oldTitle: "干部任免审批表", title: "劳动合同书", fields: { name: "张三" } },
+  { ref: "00001-0902-002", oldTitle: "干部任免审批表", title: "员工入职通知单" },
+  { ref: "00001-0902-003", oldTitle: "干部任免审批表", title: "G省就业人员登记表" },
+  { ref: "00001-1001-001", oldTitle: "其他参考材料", title: "F市中小学生体格检查表" },
+  { ref: "00001-1001-002", oldTitle: "其他参考材料", title: "就业通知书" },
+];
+
+test("all categories read their own Coze titles despite existing sources; title-only caches are reusable", async () => {
+  const harness = pipelineHarness(categoryDocs);
+  const first = await harness.audit.ensureAuditSourcesByVision("00001");
+  assert.equal(first.fromVision, categoryDocs.length);
+  assert.equal(first.failures.length, 0);
+  for (const doc of categoryDocs) assert.equal(harness.cache.get(doc.ref).materialName, doc.title);
+  assert.equal(harness.sources.get("00001-0902-001"), "劳动合同书");
+  assert.equal(harness.sources.has("00001-1001-002"), false);
+  for (const prompt of harness.prompts) assert(!prompt.includes("当前标记名"));
+  const second = await harness.audit.ensureAuditSourcesByVision("00001");
+  assert.equal(second.fromCache, categoryDocs.length);
+  assert.equal(second.fromVision, 0);
+  assert.equal(second.failures.length, 0);
+});
+
+test("legacy or incomplete caches retry, and a failed piece preserves its old sources", async () => {
+  const docs = [categoryDocs[0], { ...categoryDocs[2], fail: true }, categoryDocs[6]];
+  const cache = new Map([[docs[0].ref, { materialName: "旧演示题名", fields: { name: "张三" },
+    source: "vision", filePath: `image/${docs[0].ref}.jpg`, textContent: "old" }]]);
+  const harness = pipelineHarness(docs, cache);
+  const result = await harness.audit.ensureAuditSourcesByVision("00001");
+  assert.equal(harness.cache.get(docs[0].ref).materialName, docs[0].title);
+  assert.equal(harness.cache.get(docs[2].ref).materialName, docs[2].title);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0].materialNo, docs[1].ref);
+  assert.equal(harness.sources.get(docs[1].ref), "old source");
+  assert(!harness.calls.some((c) => c.sql.includes("DELETE FROM audit_field_sources") && !c.sql.includes("material_no")));
+});
+
+test("a missing title is reported and retried even when Coze extracted person fields", async () => {
+  const doc = { ...categoryDocs[2], title: "" };
+  const harness = pipelineHarness([doc]);
+  const first = await harness.audit.ensureAuditSourcesByVision("00001");
+  assert.equal(first.failures[0].error, "vision_returned_no_title");
+  doc.title = "劳动合同书";
+  const second = await harness.audit.ensureAuditSourcesByVision("00001");
+  assert.equal(second.fromVision, 1);
+  assert.equal(second.failures.length, 0);
+  assert.equal(harness.sources.get(doc.ref), "劳动合同书");
+});
+
+test("audit uploads invalidate replaced scans and never assign demo titles, dates or summaries", async () => {
+  const calls = [];
+  const repo = loadModule("../lib/repos/audit-upload.ts", {
+    "@/lib/db": { query: async (sql, params) => {
+      calls.push({ sql, params });
+      return { rows: sql.includes("RETURNING id") ? [{ id: "1" }] : [] };
+    } },
+    "@/lib/repos/page-texts": { ensurePageTextsTable: async () => {} },
   }).exports;
-  assert.equal(
-    catalog.auditUploadTitleCorrection("00001-0700-001"),
-    "先进个人审批表"
-  );
-  assert.equal(catalog.auditUploadTitleCorrection("00002-0700-001"), undefined);
-  assert.equal(catalog.auditUploadTitleCorrection("00001-0700-002"), undefined);
-  assert.equal(
-    catalog.auditUploadCatalogEntry("00001-0600-003", "0600").materialName,
-    "入党志愿书"
-  );
+  await repo.replaceOrderedPieces("00001", categoryDocs.map((d) => ({
+    formalNo: d.ref, personCode: "00001", categoryCode: d.ref.split("-")[1],
+    pages: [{ pageNo: 1, fileName: `${d.ref}-001.jpg`, filePath: `image/${d.ref}.jpg` }],
+  })), { clearFirst: false });
+  const inserts = calls.filter((c) => c.sql.includes("INSERT INTO ordered_archive_pieces"));
+  assert.equal(inserts.length, categoryDocs.length);
+  for (const insert of inserts) {
+    assert.match(insert.params[3], /^档案材料 /);
+    assert.equal(insert.params[4], null);
+    assert.equal(insert.params[5], null);
+  }
+  for (const table of ["archive_page_texts", "audit_field_sources"]) {
+    const invalidation = calls.find((c) => c.sql.includes(`DELETE FROM ${table}`));
+    assert.equal(invalidation.params[0], "00001");
+    assert.equal(invalidation.params[1].length, categoryDocs.length);
+    assert.equal(invalidation.params[2], false);
+  }
 });

@@ -36,6 +36,8 @@ export type PageTextRow = {
   textContent: string;
   fields: Record<string, string>;
   source: string;
+  /** Audit re-extraction must also clear fields/text that the new image doesn't contain. */
+  replaceContent?: boolean;
 };
 
 export async function upsertPageText(row: PageTextRow) {
@@ -49,9 +51,11 @@ export async function upsertPageText(row: PageTextRow) {
        material_name = EXCLUDED.material_name,
        file_path = COALESCE(EXCLUDED.file_path, archive_page_texts.file_path),
        text_content = CASE
+         WHEN $9 THEN EXCLUDED.text_content
          WHEN EXCLUDED.text_content <> '' THEN EXCLUDED.text_content
          ELSE archive_page_texts.text_content END,
        fields = CASE
+         WHEN $9 THEN EXCLUDED.fields
          WHEN EXCLUDED.fields <> '{}'::jsonb THEN EXCLUDED.fields
          ELSE archive_page_texts.fields END,
        source = EXCLUDED.source,
@@ -65,6 +69,7 @@ export async function upsertPageText(row: PageTextRow) {
       row.textContent || "",
       JSON.stringify(row.fields || {}),
       row.source || "vision",
+      !!row.replaceContent,
     ]
   );
 }
@@ -79,8 +84,10 @@ export async function getPageText(
     text_content: string;
     fields: Record<string, string> | string;
     material_name: string | null;
+    file_path: string | null;
+    source: string;
   }>(
-    `SELECT text_content, fields, material_name
+    `SELECT text_content, fields, material_name, file_path, source
      FROM archive_page_texts
      WHERE person_code = $1 AND piece_ref = $2 AND page_no = $3`,
     [personCode, pieceRef, pageNo]
@@ -95,6 +102,8 @@ export async function getPageText(
     textContent: row.text_content || "",
     fields,
     materialName: row.material_name || undefined,
+    filePath: row.file_path || undefined,
+    source: row.source,
   };
 }
 

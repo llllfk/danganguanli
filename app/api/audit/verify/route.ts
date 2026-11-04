@@ -14,9 +14,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST 核验
- * - 默认：有出处则只跑规则比对并写报告；无出处才抽视觉/缓存
- * - forceVision：强制重读影像（清空出处后重抽，可复用 page_texts 除非 forceVision 清缓存逻辑）
- * - rebuildFromCache：无出处时优先用 page_texts 重建
+ * - 默认逐件检查缓存，缺少可信题名时识别该件，避免部分出处跳过整批材料。
+ * - forceVision：逐件重读影像；失败的件保留已有出处。
  */
 export async function POST(request: NextRequest) {
   try {
@@ -39,22 +38,13 @@ export async function POST(request: NextRequest) {
 
     let visionNote = "";
     const before = await countAuditSources(personCode);
-    // 已有出处但关键比对字段（姓名/出生等）过少 → 视为未真正读出，自动重抽
-    const keyCover = await query<{ n: number }>(
-      `SELECT count(DISTINCT field_key)::int AS n
-       FROM audit_field_sources
-       WHERE person_code = $1
-         AND field_key = ANY($2::text[])
-         AND nullif(trim(value), '') IS NOT NULL`,
-      [personCode, ["name", "birth", "work", "party", "education", "degree"]]
-    );
-    const thinSources = before > 0 && (keyCover.rows[0]?.n || 0) < 2;
+    let failures: Array<{ materialNo: string; error: string }> = [];
 
-    if (body.forceVision || (!body.rulesOnly && (before === 0 || thinSources))) {
+    if (body.forceVision || !body.rulesOnly) {
       const v = await ensureAuditSourcesByVision(personCode, {
-        force: body.forceVision || thinSources,
         forceVision: !!body.forceVision,
       });
+      failures = v.failures;
       if (v.reason === "no_page_files") {
         visionNote = "无可用扫描页文件；";
       } else if (v.reason === "vision_not_configured") {
@@ -63,12 +53,13 @@ export async function POST(request: NextRequest) {
           : "未配置视觉 Bot，且库中无比对出处；";
       } else if (body.forceVision) {
         visionNote = `强制重读影像：缓存页 ${v.fromCache}，视觉 ${v.fromVision}，写入出处 ${v.extracted}；`;
-      } else if (thinSources) {
-        visionNote = `原出处缺少比对字段，已重抽：写入 ${v.extracted}（缓存 ${v.fromCache} / 视觉 ${v.fromVision}）；`;
       } else if (v.extracted > 0) {
         visionNote = `补齐出处 ${v.extracted}（缓存 ${v.fromCache} 页 / 视觉 ${v.fromVision} 页）；`;
       } else if (!v.skipped) {
-        visionNote = "已尝试提取但未写出比对字段；";
+        visionNote = `已处理材料题名（缓存 ${v.fromCache} 页 / 视觉 ${v.fromVision} 页）；`;
+      }
+      if (failures.length) {
+        visionNote += `有 ${failures.length} 件识别未完成：${failures.map((f) => f.materialNo).join("、")}；再次开始检验可重试；`;
       }
     } else {
       visionNote =
@@ -100,6 +91,7 @@ export async function POST(request: NextRequest) {
         visionNote,
         sourceCount: await countAuditSources(personCode),
         textCount,
+        failures,
       },
     });
   } catch (e) {

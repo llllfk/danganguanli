@@ -5,7 +5,7 @@
  * - 优先复用 archive_page_texts；字段写入 audit_field_sources
  */
 import { query } from "@/lib/db";
-import { auditUploadTitleCorrection } from "@/lib/audit-upload-catalog";
+import { AUDIT_VISION_SOURCE, cleanAuditTitle } from "@/lib/audit-title";
 import {
   isCozeVisionConfigured,
   uploadCozeFile,
@@ -21,7 +21,6 @@ import {
 } from "@/lib/repos/page-texts";
 import { getObjectBytes } from "@/lib/storage";
 import {
-  guessTitleFromRaw,
   looksLikePlaceholderName,
   normalizeOneDate,
   unwrapAssistantJsonPayload,
@@ -67,8 +66,8 @@ type VisionExtract = {
 
 type ImageInput = { bytes: Buffer; fileName: string; pageNo: number };
 
-function buildPrompt(pageCount: number, materialName: string) {
-  return `你是干部人事档案审核助手。以下共 ${pageCount} 张图片，属于同一件材料（当前标记名：${materialName || "未命名"}），已按页序排列。
+function buildPrompt(pageCount: number) {
+  return `你是干部人事档案审核助手。以下共 ${pageCount} 张图片，属于同一件材料，已按页序排列。根据图片实际内容读取，不能根据分类号、件号或已有名称猜测题名。
 请通读全部页面，抽取可用于信息比对的具体记载（不要只返回文件名/件号），某页看不清则从其它页补；确实没有则省略该键。只输出一行 JSON：
 {"materialTitle":"材料正文题名","name":"姓名","birth":"出生日期YYYY-MM-DD","work":"参加工作时间YYYY-MM-DD","party":"入党时间YYYY-MM-DD","education":"学历","degree":"学位","experience":"工作经历摘要","recognition":"组织认定摘要","pageText":"各页关键文字摘要合并，400字内"}
 规则：
@@ -79,11 +78,7 @@ function buildPrompt(pageCount: number, materialName: string) {
 }
 
 function cleanTitle(raw: string | undefined): string | undefined {
-  const t = String(raw || "")
-    .trim()
-    .replace(/\s+/g, "");
-  if (!t || looksLikePlaceholderName(t)) return undefined;
-  return t;
+  return cleanAuditTitle(raw);
 }
 
 function parseVisionAnswer(answer: string): VisionExtract {
@@ -93,7 +88,6 @@ function parseVisionAnswer(answer: string): VisionExtract {
     return {
       fields: {},
       pageText: "",
-      materialTitle: guessTitleFromRaw(answer),
       raw: answer,
     };
   }
@@ -109,20 +103,10 @@ function parseVisionAnswer(answer: string): VisionExtract {
       fields[k] = v;
     }
     const pageText = String(obj.pageText || "").trim();
-    const materialTitle =
-      cleanTitle(
-        String(
-          obj.materialTitle ||
-            obj.material_title ||
-            obj.materialName ||
-            obj.title ||
-            obj.题名 ||
-            ""
-        )
-      ) ||
-      guessTitleFromRaw(pageText) ||
-      guessTitleFromRaw(payload) ||
-      guessTitleFromRaw(answer);
+    const materialTitle = [
+      obj.materialTitle, obj.material_title, obj.materialName,
+      obj.material_name, obj.title, obj.题名,
+    ].map(cleanAuditTitle).find(Boolean);
     return {
       fields,
       pageText,
@@ -133,7 +117,6 @@ function parseVisionAnswer(answer: string): VisionExtract {
     return {
       fields: {},
       pageText: "",
-      materialTitle: guessTitleFromRaw(answer),
       raw: answer,
     };
   }
@@ -176,7 +159,7 @@ async function extractFieldsFromImages(
   > = [
     {
       type: "text",
-      text: buildPrompt(images.length, materialName),
+      text: buildPrompt(images.length),
     },
   ];
   for (const img of images) {
@@ -416,334 +399,100 @@ function groupByPiece(pages: PageRow[]): PageRow[][] {
 async function maybeUpdatePieceTitle(
   personCode: string,
   piece: PageRow,
-  title?: string,
-  allowReplace = false
+  title?: string
 ) {
-  const t = (title || "").trim().replace(/\s+/g, "");
+  const t = cleanTitle(title);
   if (!t || looksLikePlaceholderName(t, piece.material_no)) {
     return piece.material_name;
   }
   const cur = (piece.material_name || "").trim();
   if (cur === t) return t;
-  // 已有正经题名则保留；占位名（含「档案材料 …」）一律可被视觉题名覆盖
-  if (
-    cur &&
-    !looksLikePlaceholderName(cur, piece.material_no) &&
-    !allowReplace
-  ) {
-    return cur;
-  }
+  // Title comes only from the current audit extraction or its matching versioned cache.
   await query(
     `UPDATE ordered_archive_pieces
      SET material_name = $1
      WHERE person_code = $2 AND formal_no = $3`,
     [t, personCode, piece.material_no]
   );
-  await query(
-    `UPDATE archive_pieces
-     SET material_name = $1, updated_at = CURRENT_TIMESTAMP
-     WHERE person_code = $2
-       AND (serial_no = $3 OR formal_no = $3)`,
-    [t, personCode, piece.material_no]
-  );
   return t;
 }
 
 /**
- * 出处/页摘要已有正经题名，但左侧件表仍是「档案材料 …」时强制回写。
- * 核验后、加载材料时都会跑，避免只更新右侧出处。
+ * 只同步新版审核缓存中从当前图片识别的题名；不把旧演示题名回填到界面。
  */
 export async function repairPlaceholderTitles(personCode: string): Promise<number> {
-  // 1) 直接从出处题名回写左侧（右侧已对、左侧未对的最常见情况）
-  const fromSources = await query(
+  const result = await query(
     `UPDATE ordered_archive_pieces p
-     SET material_name = s.title
-     FROM (
-       SELECT material_no,
-              min(material_name) AS title
-       FROM audit_field_sources
-       WHERE person_code = $1
-         AND nullif(trim(material_name), '') IS NOT NULL
-         AND material_name !~ '^档案材料'
-         AND material_name !~ '^[0-9]{4,}-'
-       GROUP BY material_no
-     ) s
-     WHERE p.person_code = $1
-       AND p.formal_no = s.material_no
-       AND (
-         p.material_name IS NULL
-         OR btrim(p.material_name) = ''
-         OR p.material_name ~ '^档案材料'
-         OR p.material_name = p.formal_no
+     SET material_name = t.material_name
+     FROM archive_page_texts t
+     WHERE p.person_code = $1 AND t.person_code = p.person_code
+       AND t.piece_ref = p.formal_no AND t.source = $2
+       AND nullif(trim(t.material_name), '') IS NOT NULL
+       AND p.material_name IS DISTINCT FROM t.material_name
+       AND t.page_no = (
+         SELECT min(pg.page_no) FROM ordered_archive_pages pg WHERE pg.piece_id = p.id
+       )
+       AND EXISTS (
+         SELECT 1 FROM ordered_archive_pages pg
+         WHERE pg.piece_id = p.id AND pg.page_no = t.page_no AND pg.file_path = t.file_path
        )`,
-    [personCode]
-  );
-
-  // 2) 再从页文本缓存题名回写（出处若仍是占位）
-  const fromPages = await query(
-    `UPDATE ordered_archive_pieces p
-     SET material_name = t.title
-     FROM (
-       SELECT piece_ref AS material_no,
-              min(material_name) AS title
-       FROM archive_page_texts
-       WHERE person_code = $1
-         AND nullif(trim(material_name), '') IS NOT NULL
-         AND material_name !~ '^档案材料'
-         AND material_name !~ '^[0-9]{4,}-'
-       GROUP BY piece_ref
-     ) t
-     WHERE p.person_code = $1
-       AND p.formal_no = t.material_no
-       AND (
-         p.material_name IS NULL
-         OR btrim(p.material_name) = ''
-         OR p.material_name ~ '^档案材料'
-         OR p.material_name = p.formal_no
-       )`,
-    [personCode]
-  );
-
-  await query(
-    `UPDATE archive_pieces p
-     SET material_name = s.title,
-         updated_at = CURRENT_TIMESTAMP
-     FROM (
-       SELECT material_no, min(material_name) AS title
-       FROM (
-         SELECT material_no, material_name FROM audit_field_sources
-         WHERE person_code = $1
-         UNION ALL
-         SELECT piece_ref, material_name FROM archive_page_texts
-         WHERE person_code = $1
-       ) u
-       WHERE nullif(trim(material_name), '') IS NOT NULL
-         AND material_name !~ '^档案材料'
-         AND material_name !~ '^[0-9]{4,}-'
-       GROUP BY material_no
-     ) s
-     WHERE p.person_code = $1
-       AND (p.serial_no = s.material_no OR p.formal_no = s.material_no)
-       AND (
-         p.material_name IS NULL
-         OR btrim(p.material_name) = ''
-         OR p.material_name ~ '^档案材料'
-         OR p.material_name = p.serial_no
-         OR p.material_name = coalesce(p.formal_no, '')
-       )`,
-    [personCode]
-  ).catch(() => undefined);
-
-  // 3) 页摘要正文里能猜出表名时再补一轮
-  const rows = await query<{
-    material_no: string;
-    material_name: string | null;
-    text_content: string | null;
-  }>(
-    `SELECT piece_ref AS material_no, material_name, text_content
-     FROM archive_page_texts
-     WHERE person_code = $1
-     ORDER BY piece_ref, page_no`,
-    [personCode]
-  );
-  let guessedN = 0;
-  const seen = new Set<string>();
-  for (const r of rows.rows) {
-    if (seen.has(r.material_no)) continue;
-    const already = cleanTitle(r.material_name || undefined);
-    const guessed = already || cleanTitle(guessTitleFromRaw(r.text_content || ""));
-    if (!guessed) continue;
-    seen.add(r.material_no);
-    const piece = await query<{ material_name: string; material_no: string }>(
-      `SELECT material_name, formal_no AS material_no
-       FROM ordered_archive_pieces
-       WHERE person_code = $1 AND formal_no = $2
-       UNION ALL
-       SELECT material_name, coalesce(formal_no, serial_no) AS material_no
-       FROM archive_pieces
-       WHERE person_code = $1 AND (formal_no = $2 OR serial_no = $2)
-       LIMIT 1`,
-      [personCode, r.material_no]
-    );
-    if (!piece.rows[0]) continue;
-    if (!looksLikePlaceholderName(piece.rows[0].material_name, r.material_no)) {
-      continue;
-    }
-    const written = await maybeUpdatePieceTitle(
-      personCode,
-      piece.rows[0] as PageRow,
-      guessed
-    );
-    if (written === guessed) guessedN += 1;
-  }
-
-  // 旧缓存曾把占位名写进出处。件表修复后也要同步这两处，
-  // 否则默认「复用已有出处」仍会在右侧报告中显示旧名称。
-  for (const target of [
-    { table: "audit_field_sources", ref: "material_no" },
-    { table: "archive_page_texts", ref: "piece_ref" },
-  ]) {
-    await query(
-      `UPDATE ${target.table} dest
-       SET material_name = p.material_name
-       FROM (
-         SELECT formal_no AS material_no, material_name
-         FROM ordered_archive_pieces WHERE person_code = $1
-         UNION ALL
-         SELECT coalesce(formal_no, serial_no), material_name
-         FROM archive_pieces WHERE person_code = $1
-         UNION ALL
-         SELECT serial_no, material_name
-         FROM archive_pieces WHERE person_code = $1
-       ) p
-       WHERE dest.person_code = $1 AND dest.${target.ref} = p.material_no
-         AND nullif(trim(p.material_name), '') IS NOT NULL
-         AND p.material_name !~ '^档案材料'
-         AND p.material_name !~ '^[0-9]{4,}-'
-         AND (
-           nullif(trim(dest.material_name), '') IS NULL
-           OR dest.material_name ~ '^档案材料'
-           OR dest.material_name = dest.${target.ref}
-         )`,
-      [personCode]
-    );
-  }
-
-  const n =
-    (fromSources.rowCount || 0) + (fromPages.rowCount || 0) + guessedN;
-  if (n > 0) {
-    console.info("repairPlaceholderTitles", personCode, "updated", n);
-  }
-  return n;
-}
-
-/** 出处里已有正经题名、件表仍是「档案材料 …」时回写左侧列表 */
-async function syncTitlesFromSources(personCode: string) {
-  await query(
-    `UPDATE ordered_archive_pieces p
-     SET material_name = s.title
-     FROM (
-       SELECT material_no,
-              min(material_name) AS title
-       FROM audit_field_sources
-       WHERE person_code = $1
-         AND nullif(trim(material_name), '') IS NOT NULL
-         AND material_name !~ '^[0-9]{4,}-'
-         AND material_name !~ '^档案材料'
-       GROUP BY material_no
-     ) s
-     WHERE p.person_code = $1
-       AND p.formal_no = s.material_no
-       AND (
-         p.material_name IS NULL
-         OR btrim(p.material_name) = ''
-         OR p.material_name ~ '^档案材料'
-         OR p.material_name = p.formal_no
-       )`,
-    [personCode]
+    [personCode, AUDIT_VISION_SOURCE]
   );
   await query(
-    `UPDATE archive_pieces p
-     SET material_name = s.title,
-         updated_at = CURRENT_TIMESTAMP
-     FROM (
-       SELECT material_no,
-              min(material_name) AS title
-       FROM audit_field_sources
-       WHERE person_code = $1
-         AND nullif(trim(material_name), '') IS NOT NULL
-         AND material_name !~ '^[0-9]{4,}-'
-         AND material_name !~ '^档案材料'
-       GROUP BY material_no
-     ) s
-     WHERE p.person_code = $1
-       AND (p.serial_no = s.material_no OR p.formal_no = s.material_no)
+    `UPDATE audit_field_sources s SET material_name = t.material_name
+     FROM archive_page_texts t
+     WHERE s.person_code = $1 AND t.person_code = s.person_code
+       AND t.piece_ref = s.material_no AND t.source = $2
+       AND nullif(trim(t.material_name), '') IS NOT NULL
+       AND s.material_name IS DISTINCT FROM t.material_name
+       AND t.page_no = (
+         SELECT min(t2.page_no) FROM archive_page_texts t2
+         WHERE t2.person_code = t.person_code AND t2.piece_ref = t.piece_ref
+           AND t2.source = $2
+       )
        AND (
-         p.material_name IS NULL
-         OR btrim(p.material_name) = ''
-         OR p.material_name ~ '^档案材料'
-         OR p.material_name = p.serial_no
-         OR p.material_name = coalesce(p.formal_no, '')
+         EXISTS (
+           SELECT 1 FROM ordered_archive_pieces p
+           JOIN ordered_archive_pages pg ON pg.piece_id = p.id
+           WHERE p.person_code = t.person_code AND p.formal_no = t.piece_ref
+             AND pg.page_no = t.page_no AND pg.file_path = t.file_path
+         ) OR (
+           NOT EXISTS (SELECT 1 FROM ordered_archive_pieces p WHERE p.person_code = t.person_code)
+           AND EXISTS (
+             SELECT 1 FROM archive_pieces p JOIN archive_pages pg ON pg.piece_id = p.id
+             WHERE p.person_code = t.person_code
+               AND (p.serial_no = t.piece_ref OR p.formal_no = t.piece_ref)
+               AND pg.page_no = t.page_no AND pg.file_path = t.file_path
+           )
+         )
        )`,
-    [personCode]
+    [personCode, AUDIT_VISION_SOURCE]
   );
+  return result.rowCount || 0;
 }
 
 async function resolveSourceTitle(
   personCode: string,
   piece: PageRow,
-  materialTitle?: string,
-  rawHint?: string,
-  preferVisionTitle = false
+  materialTitle?: string
 ): Promise<string> {
-  const knownTitle = auditUploadTitleCorrection(piece.material_no);
-  const returnedTitle = cleanTitle(materialTitle);
-  const guessed = guessTitleFromRaw(rawHint || "");
-  const candidates = preferVisionTitle
-    ? [returnedTitle, knownTitle, guessed]
-    : [knownTitle, returnedTitle, guessed];
-  for (const cand of candidates) {
-    const t = cleanTitle(cand);
-    if (!t) continue;
-    const written = await maybeUpdatePieceTitle(
-      personCode,
-      piece,
-      t,
-      (preferVisionTitle && t === returnedTitle) || t === knownTitle
-    );
-    if (written && !looksLikePlaceholderName(written, piece.material_no)) {
-      return written;
-    }
-    return t;
+  const title = cleanTitle(materialTitle);
+  if (title) {
+    return maybeUpdatePieceTitle(personCode, piece, title);
   }
-
-  // 强制重抽会清空出处：再从页文本缓存 / 旧出处里找正经题名
-  const prev = await query<{ material_name: string }>(
-    `SELECT material_name FROM (
-       SELECT material_name, id
-       FROM audit_field_sources
-       WHERE person_code = $1 AND material_no = $2
-       UNION ALL
-       SELECT material_name, id
-       FROM archive_page_texts
-       WHERE person_code = $1 AND piece_ref = $2
-     ) t
-     WHERE nullif(trim(material_name), '') IS NOT NULL
-       AND material_name !~ '^档案材料'
-       AND material_name !~ '^[0-9]{4,}-'
-     ORDER BY id DESC
-     LIMIT 1`,
-    [personCode, piece.material_no]
-  );
-  if (prev.rows[0]?.material_name) {
-    const keep = cleanTitle(prev.rows[0].material_name);
-    if (keep) {
-      await maybeUpdatePieceTitle(personCode, piece, keep);
-      return keep;
-    }
-  }
-
-  const cur = (piece.material_name || "").trim();
-  if (cur && !looksLikePlaceholderName(cur, piece.material_no)) return cur;
-
-  // 仍无题名：来源处显示件号，避免两侧都刷成「档案材料 …」
-  return piece.material_no || "未命名材料";
+  return piece.material_no || "";
 }
 
 async function insertFieldSources(
   personCode: string,
   piece: PageRow,
   fields: Record<string, string>,
-  materialTitle?: string,
-  rawHint?: string,
-  preferVisionTitle = false
+  materialTitle?: string
 ) {
   const displayName = await resolveSourceTitle(
     personCode,
     piece,
-    materialTitle,
-    rawHint,
-    preferVisionTitle
+    materialTitle
   );
   const year = (piece.form_date || "").slice(0, 4);
   let n = 0;
@@ -774,7 +523,7 @@ async function insertFieldSources(
  */
 export async function ensureAuditSourcesByVision(
   personCode: string,
-  opts?: { force?: boolean; forceVision?: boolean }
+  opts?: { forceVision?: boolean }
 ): Promise<{
   extracted: number;
   skipped: boolean;
@@ -782,173 +531,119 @@ export async function ensureAuditSourcesByVision(
   fromCache: number;
   fromVision: number;
   pages: number;
+  failures: Array<{ materialNo: string; error: string }>;
 }> {
-  const before = await query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM audit_field_sources WHERE person_code = $1`,
-    [personCode]
-  );
-  if ((before.rows[0]?.n || 0) > 0 && !opts?.force) {
-    await syncTitlesFromSources(personCode).catch(() => undefined);
-    return {
-      extracted: 0,
-      skipped: true,
-      reason: "already_has_sources",
-      fromCache: 0,
-      fromVision: 0,
-      pages: 0,
-    };
-  }
-
-  if (opts?.force) {
-    await query(`DELETE FROM audit_field_sources WHERE person_code = $1`, [
-      personCode,
-    ]);
-    // 清掉缓存里被污染的「档案材料 …」题名，避免再次写回出处
-    await query(
-      `UPDATE archive_page_texts
-       SET material_name = NULL
-       WHERE person_code = $1
-         AND (
-           material_name IS NULL
-           OR btrim(material_name) = ''
-           OR material_name ~ '^档案材料'
-           OR material_name ~ '^[0-9]{4,}-'
-         )`,
-      [personCode]
-    ).catch(() => undefined);
-  }
-
   const pages = await listPagesForAudit(personCode);
   if (!pages.length) {
-    return {
-      extracted: 0,
-      skipped: true,
-      reason: "no_page_files",
-      fromCache: 0,
-      fromVision: 0,
-      pages: 0,
-    };
+    return { extracted: 0, skipped: true, reason: "no_page_files", fromCache: 0,
+      fromVision: 0, pages: 0, failures: [] };
   }
-
   const visionOk = isCozeVisionConfigured();
   let extracted = 0;
   let fromCache = 0;
   let fromVision = 0;
+  const failures: Array<{ materialNo: string; error: string }> = [];
+
   const pieces = groupByPiece(pages);
-
-  for (const piecePages of pieces) {
+  const processPiece = async (piecePages: PageRow[]) => {
     const head = piecePages[0];
-    if (!head) continue;
-
+    if (!head) return;
     try {
-      // 仅当已抽出过比对字段时才走缓存；只有文件名/空字段则强制再读图
+      let result: VisionExtract | undefined;
+      let cached = false;
       if (!opts?.forceVision) {
-        const cachedList = await Promise.all(
-          piecePages.map((p) =>
-            getPageText(personCode, p.material_no, p.page_no)
-          )
+        const cachedPages = await Promise.all(piecePages.map((p) =>
+          getPageText(personCode, p.material_no, p.page_no)
+        ));
+        const first = cachedPages[0];
+        const title = cleanTitle(first?.materialName);
+        const sameImages = cachedPages.every((c, i) =>
+          c?.source === AUDIT_VISION_SOURCE && c.filePath === piecePages[i].file_path
         );
-        const fields: Record<string, string> = {};
-        let cachedTitle: string | undefined;
-        const rawBits: string[] = [];
-        for (const c of cachedList) {
-          if (!c) continue;
-          for (const [k, v] of Object.entries(c.fields || {})) {
-            if (v && !fields[k]) fields[k] = v;
-          }
-          if (!cachedTitle && cleanTitle(c.materialName)) {
-            cachedTitle = cleanTitle(c.materialName);
-          }
-          if (c.textContent) rawBits.push(c.textContent);
-        }
-        if (Object.keys(fields).length > 0) {
-          fromCache += piecePages.length;
-          extracted += await insertFieldSources(
-            personCode,
-            head,
-            fields,
-            cachedTitle,
-            rawBits.join("\n")
-          );
-          continue;
+        // A title-only document is a valid cache hit. Legacy/incomplete caches retry.
+        if (sameImages && title && first) {
+          result = {
+            fields: first.fields,
+            pageText: first.textContent,
+            materialTitle: title,
+            raw: "",
+          };
+          cached = true;
         }
       }
-
-      if (!visionOk) continue;
-
-      const images: ImageInput[] = [];
-      for (const p of piecePages) {
-        if (!p.file_path) continue;
-        const bytes = await getObjectBytes(p.file_path);
-        images.push({
-          bytes,
-          fileName: p.file_name || `${p.material_no}-${p.page_no}.jpg`,
-          pageNo: p.page_no,
-        });
+      if (!result) {
+        if (!visionOk) {
+          failures.push({ materialNo: head.material_no, error: "vision_not_configured" });
+          return;
+        }
+        const images: ImageInput[] = [];
+        for (const page of piecePages) {
+          if (!page.file_path) continue;
+          images.push({
+            bytes: await getObjectBytes(page.file_path),
+            fileName: page.file_name || `${page.material_no}-${page.page_no}.jpg`,
+            pageNo: page.page_no,
+          });
+        }
+        if (!images.length) throw new Error("no_page_files");
+        result = (await extractFieldsWithFallback(images, head.material_name)).result;
+        fromVision += images.length;
+        if (!cleanTitle(result.materialTitle) && !Object.keys(result.fields).length) {
+          throw new Error("vision_returned_no_title_or_fields");
+        }
       }
-      if (!images.length) continue;
-
-      const { result } = await extractFieldsWithFallback(
-        images,
-        head.material_name
-      );
-      fromVision += images.length;
-
+      const title = cleanTitle(result.materialTitle);
       const resolvedTitle = await resolveSourceTitle(
-        personCode,
-        head,
-        result.materialTitle,
-        `${result.pageText || ""}\n${result.raw || ""}`,
-        true
+        personCode, head, title
       );
-
-      // 首页写合并结果；其余页写占位便于缓存命中
-      for (const p of piecePages) {
-        const isFirst = p.page_no === piecePages[0].page_no;
-        await upsertPageText({
-          personCode,
-          pieceRef: p.material_no,
-          pageNo: p.page_no,
-          materialName: resolvedTitle,
-          filePath: p.file_path || undefined,
-          textContent: isFirst ? result.pageText || result.raw || "" : "",
-          fields: isFirst ? result.fields : {},
-          source: "vision",
-        });
+      // Replace per piece only after successful extraction, preserving other pieces on failure.
+      await query(
+        `DELETE FROM audit_field_sources WHERE person_code = $1 AND material_no = $2`,
+        [personCode, head.material_no]
+      );
+      if (!cached) {
+        for (const page of piecePages) {
+          const firstPage = page.page_no === head.page_no;
+          await upsertPageText({
+            personCode,
+            pieceRef: page.material_no,
+            pageNo: page.page_no,
+            materialName: title,
+            filePath: page.file_path || undefined,
+            textContent: firstPage ? result.pageText || result.raw : "",
+            fields: firstPage ? result.fields : {},
+            source: AUDIT_VISION_SOURCE,
+            replaceContent: true,
+          });
+        }
+      } else {
+        fromCache += piecePages.length;
       }
-
       extracted += await insertFieldSources(
-        personCode,
-        head,
-        result.fields,
-        resolvedTitle,
-        `${result.pageText || ""}\n${result.raw || ""}`,
-        true
+        personCode, { ...head, material_name: resolvedTitle }, result.fields,
+        title
       );
+      if (!title) {
+        failures.push({ materialNo: head.material_no, error: "vision_returned_no_title" });
+      }
     } catch (e) {
+      failures.push({ materialNo: head.material_no,
+        error: e instanceof Error ? e.message : String(e) });
       console.warn("audit vision piece failed", head.material_no, e);
     }
-  }
-
-  if (!visionOk && fromCache === 0 && extracted === 0) {
-    await syncTitlesFromSources(personCode).catch(() => undefined);
-    return {
-      extracted: 0,
-      skipped: true,
-      reason: "vision_not_configured",
-      fromCache: 0,
-      fromVision: 0,
-      pages: pages.length,
-    };
-  }
-
-  await syncTitlesFromSources(personCode).catch(() => undefined);
-
+  };
+  let nextPiece = 0;
+  await Promise.all(Array.from({ length: Math.min(3, pieces.length) }, async () => {
+    while (nextPiece < pieces.length) {
+      const piece = pieces[nextPiece++];
+      await processPiece(piece);
+    }
+  }));
+  await repairPlaceholderTitles(personCode);
   return {
     extracted,
-    skipped: false,
-    fromCache,
-    fromVision,
-    pages: pages.length,
+    skipped: !visionOk && !fromCache && !extracted,
+    reason: !visionOk && !fromCache && !extracted ? "vision_not_configured" : undefined,
+    fromCache, fromVision, pages: pages.length, failures,
   };
 }

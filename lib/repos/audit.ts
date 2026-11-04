@@ -1,9 +1,6 @@
 import { query } from "@/lib/db";
-import { auditUploadTitleCorrection } from "@/lib/audit-upload-catalog";
-import {
-  guessTitleFromRaw,
-  looksLikePlaceholderName,
-} from "@/lib/vision-meta";
+import { AUDIT_VISION_SOURCE, cleanAuditTitle } from "@/lib/audit-title";
+import { ensurePageTextsTable } from "@/lib/repos/page-texts";
 import type {
   AuditFieldResult,
   AuditReport,
@@ -65,55 +62,41 @@ export type PersonMaterial = {
   source: "ordered" | "unordered";
 };
 
-/** 审核数据源：优先附件6 有序件；无则回退乱序件。占位名从页摘要/出处兜题名。 */
+/** Audit titles must be read from these scans, rather than a demo catalog or body text. */
 async function resolveDisplayTitles(
   personCode: string,
   refs: string[]
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (!refs.length) return map;
-  const pages = await query<{
-    piece_ref: string;
-    material_name: string | null;
-    text_content: string | null;
-  }>(
-    `SELECT piece_ref, material_name, text_content
-     FROM archive_page_texts
-     WHERE person_code = $1 AND piece_ref = ANY($2::text[])
-     ORDER BY piece_ref, page_no`,
-    [personCode, refs]
+  await ensurePageTextsTable();
+  const pages = await query<{ piece_ref: string; material_name: string | null }>(
+    `SELECT t.piece_ref, t.material_name
+     FROM archive_page_texts t
+     WHERE t.person_code = $1 AND t.piece_ref = ANY($2::text[])
+       AND t.source = $3
+       AND (
+         EXISTS (
+           SELECT 1 FROM ordered_archive_pieces p
+           JOIN ordered_archive_pages pg ON pg.piece_id = p.id
+           WHERE p.person_code = t.person_code AND p.formal_no = t.piece_ref
+             AND pg.page_no = t.page_no AND pg.file_path = t.file_path
+         ) OR (
+           NOT EXISTS (SELECT 1 FROM ordered_archive_pieces p WHERE p.person_code = t.person_code)
+           AND EXISTS (
+             SELECT 1 FROM archive_pieces p JOIN archive_pages pg ON pg.piece_id = p.id
+             WHERE p.person_code = t.person_code
+               AND (p.serial_no = t.piece_ref OR p.formal_no = t.piece_ref)
+               AND pg.page_no = t.page_no AND pg.file_path = t.file_path
+           )
+         )
+       )
+     ORDER BY t.piece_ref, t.page_no`,
+    [personCode, refs, AUDIT_VISION_SOURCE]
   );
   for (const row of pages.rows) {
-    if (map.has(row.piece_ref)) continue;
-    const cached = (row.material_name || "").trim();
-    if (cached && !looksLikePlaceholderName(cached, row.piece_ref)) {
-      map.set(row.piece_ref, cached);
-      continue;
-    }
-    const guessed = guessTitleFromRaw(row.text_content || "");
-    if (guessed && !looksLikePlaceholderName(guessed, row.piece_ref)) {
-      map.set(row.piece_ref, guessed);
-    }
-  }
-  const missing = refs.filter((r) => !map.has(r));
-  if (missing.length) {
-    const src = await query<{ material_no: string; material_name: string }>(
-      `SELECT DISTINCT ON (material_no) material_no, material_name
-       FROM audit_field_sources
-       WHERE person_code = $1
-         AND material_no = ANY($2::text[])
-         AND nullif(trim(material_name), '') IS NOT NULL
-         AND material_name !~ '^档案材料'
-         AND material_name !~ '^[0-9]{4,}-'
-       ORDER BY material_no, id DESC`,
-      [personCode, missing]
-    );
-    for (const row of src.rows) {
-      const t = (row.material_name || "").trim();
-      if (t && !looksLikePlaceholderName(t, row.material_no)) {
-        map.set(row.material_no, t);
-      }
-    }
+    const title = cleanAuditTitle(row.material_name);
+    if (title && !map.has(row.piece_ref)) map.set(row.piece_ref, title);
   }
   return map;
 }
@@ -144,15 +127,10 @@ export async function getPersonMaterials(
       ordered.rows.map((r) => r.formal_no)
     );
     return ordered.rows.map((row) => {
-      const raw = row.material_name || "";
-      const better =
-        looksLikePlaceholderName(raw, row.formal_no)
-          ? titles.get(row.formal_no)
-          : undefined;
-      const scannedTitle = auditUploadTitleCorrection(row.formal_no);
+      const title = titles.get(row.formal_no);
       return {
         category: row.category_code,
-        materialName: scannedTitle || better || raw,
+        materialName: title || row.formal_no,
         imageNames: row.image_names,
         serialNo: row.formal_no,
         pageCount: row.page_count,
@@ -186,11 +164,9 @@ export async function getPersonMaterials(
   return archive.rows.map((row) => {
     const ref = row.formal_no || row.serial_no;
     const raw = row.material_name || "";
-    const better =
-      looksLikePlaceholderName(raw, ref) ? titles.get(ref) : undefined;
     return {
       category: row.confirmed_category || row.suggested_category || "",
-      materialName: better || raw,
+      materialName: titles.get(ref) || raw,
       imageNames: row.image_names,
       serialNo: row.serial_no,
       pageCount: row.page_count,
@@ -358,6 +334,10 @@ export async function runAuditFromDb(
     [m.serialNo, m.imageNames] as const,
     [m.formalNo || m.serialNo, m.imageNames] as const,
   ]));
+  const titlesByRef = new Map(materials.flatMap((m) => [
+    [m.serialNo, m.materialName] as const,
+    [m.formalNo || m.serialNo, m.materialName] as const,
+  ]));
   for (const row of sourcesRes.rows) {
     if (!byField.has(row.field_key)) byField.set(row.field_key, []);
     byField.get(row.field_key)!.push(row);
@@ -382,7 +362,7 @@ export async function runAuditFromDb(
     }
 
     const sources: AuditSource[] = rows.map((row) => ({
-      materialName: row.material_name,
+      materialName: titlesByRef.get(row.material_no || "") || row.material_no || "未识别题名",
       imageNames: imagesByRef.get(row.material_no || "") || [],
       formYear: row.form_year || "",
       materialNo: row.material_no || "",
@@ -565,8 +545,20 @@ export async function refreshReportCompleteness(
   report: AuditReport
 ): Promise<AuditReport> {
   const completeness = await checkCompleteness(report.personCode);
+  const materials = await getPersonMaterials(report.personCode);
+  const titles = new Map(materials.flatMap((m) => [
+    [m.serialNo, m.materialName] as const,
+    [m.formalNo || m.serialNo, m.materialName] as const,
+  ]));
   return {
     ...report,
+    fields: report.fields.map((field) => ({
+      ...field,
+      sources: field.sources.map((source) => ({
+        ...source,
+        materialName: titles.get(source.materialNo) || source.materialNo || "未识别题名",
+      })),
+    })),
     completeness,
   };
 }

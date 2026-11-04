@@ -1,8 +1,5 @@
 import { query } from "@/lib/db";
-import {
-  auditUploadCatalogEntry,
-  auditUploadTitleCorrection,
-} from "@/lib/audit-upload-catalog";
+import { ensurePageTextsTable } from "@/lib/repos/page-texts";
 
 export async function ensurePerson(personCode: string, personName?: string) {
   await query(
@@ -27,6 +24,19 @@ export async function replaceOrderedPieces(
   opts?: { clearFirst?: boolean; sortStart?: number }
 ) {
   await ensurePerson(personCode);
+  await ensurePageTextsTable();
+  // A new upload can reuse the same filename. Old titles/fields must not survive it.
+  const refs = pieces.map((piece) => piece.formalNo);
+  await query(
+    `DELETE FROM archive_page_texts
+     WHERE person_code = $1 AND ($3::boolean OR piece_ref = ANY($2::text[]))`,
+    [personCode, refs, !!opts?.clearFirst]
+  );
+  await query(
+    `DELETE FROM audit_field_sources
+     WHERE person_code = $1 AND ($3::boolean OR material_no = ANY($2::text[]))`,
+    [personCode, refs, !!opts?.clearFirst]
+  );
   if (opts?.clearFirst) {
     await query(`DELETE FROM ordered_archive_pieces WHERE person_code = $1`, [
       personCode,
@@ -35,13 +45,8 @@ export async function replaceOrderedPieces(
 
   let sort = opts?.sortStart ?? 0;
   for (const piece of pieces) {
-    const catalog = auditUploadCatalogEntry(piece.formalNo, piece.categoryCode);
-    const materialName =
-      auditUploadTitleCorrection(piece.formalNo) ||
-      catalog?.materialName ||
-      `档案材料 ${piece.formalNo}`;
-    const formDate = catalog?.formDate || null;
-    const summary = catalog?.summary || null;
+    // Neither category nor sequence number identifies the scanned document's title.
+    const materialName = `档案材料 ${piece.formalNo}`;
 
     const existing = await query<{ id: string; page_count: number }>(
       `SELECT id::text, page_count FROM ordered_archive_pieces
@@ -55,7 +60,7 @@ export async function replaceOrderedPieces(
       await query(
         `UPDATE ordered_archive_pieces
          SET page_count = GREATEST(page_count, $2),
-             material_name = COALESCE(NULLIF($3,''), material_name)
+             material_name = $3, form_date = NULL, summary = NULL
          WHERE id = $1::bigint`,
         [
           pieceId,
@@ -75,8 +80,8 @@ export async function replaceOrderedPieces(
           piece.formalNo,
           piece.categoryCode,
           materialName,
-          summary,
-          formDate,
+          null,
+          null,
           piece.pages.length || 1,
           sort,
         ]
