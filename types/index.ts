@@ -121,6 +121,7 @@ export interface AuditSource {
   materialName: string;
   imageNames?: string[];
   formYear: string;
+  formDate?: string;
   materialNo: string;
   value: string;
 }

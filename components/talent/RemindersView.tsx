@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import { Modal } from "@/components/ui/Modal";
 import { TalentShell } from "./TalentShell";
+import { daysUntil, reminderDateLabel } from "@/lib/reminder-date";
 import {
   getRemindersWithOverrides,
   saveReminderOverride,
@@ -21,12 +22,13 @@ type ReminderItem = {
   daysLeft: number;
 };
 
-function daysUntil(dateStr: string) {
-  const t = new Date(dateStr.replace(/-/g, "/"));
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  t.setHours(0, 0, 0, 0);
-  return Math.round((t.getTime() - today.getTime()) / (24 * 3600 * 1000));
+function ReminderScroll({ children }: { children: React.ReactNode }) {
+  return <div className="relative min-h-[185px]">
+    <div className="max-h-[230px] overflow-y-auto pr-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">{children}</div>
+    <div aria-hidden="true" className="absolute right-0 top-0 bottom-0 w-[7px] rounded-full bg-[#edf2f7] pointer-events-none">
+      <div className="mt-1 h-14 rounded-full bg-[#b7c7d8]" />
+    </div>
+  </div>;
 }
 
 function DaysBadge({ days }: { days: number }) {
@@ -39,7 +41,7 @@ function DaysBadge({ days }: { days: number }) {
           : "bg-[#fdf1e5] text-[#d97706]"
       }`}
     >
-      剩余 {days} 天
+      {reminderDateLabel(days)}
     </span>
   );
 }
@@ -105,7 +107,7 @@ function toItems(
       label: r.label,
       daysLeft: daysUntil(r.date),
     }))
-    .filter((r) => r.daysLeft >= 0 && r.daysLeft <= nearDays);
+    .filter((r) => (type === "contract" || r.daysLeft >= 0) && r.daysLeft <= nearDays);
 }
 
 export function RemindersView() {
@@ -176,11 +178,11 @@ export function RemindersView() {
             <span className="ml-auto text-xs text-[#8a9bb0]">提前 2 个月</span>
           </div>
           <div className="h-px bg-[#9AA7B4]/30 mb-3" />
-          <ReminderList
+          <ReminderScroll><ReminderList
             items={retire}
             emptyText="近期暂无其他退休节点"
             onEdit={openEdit}
-          />
+          /></ReminderScroll>
         </section>
 
         <section className="rounded-xl border border-[#d4e3f5] bg-white p-4 min-h-[260px]">
@@ -192,11 +194,11 @@ export function RemindersView() {
             <span className="ml-auto text-xs text-[#8a9bb0]">提前 1 个月</span>
           </div>
           <div className="h-px bg-[#9AA7B4]/30 mb-3" />
-          <ReminderList
+          <ReminderScroll><ReminderList
             items={contract}
             emptyText="近期暂无合同到期节点"
             onEdit={openEdit}
-          />
+          /></ReminderScroll>
         </section>
 
         <section className="rounded-xl border border-[#d4e3f5] bg-white p-4 min-h-[260px]">
@@ -208,11 +210,11 @@ export function RemindersView() {
             <span className="ml-auto text-xs text-[#8a9bb0]">提前 1 个月</span>
           </div>
           <div className="h-px bg-[#9AA7B4]/30 mb-3" />
-          <ReminderList
+          <ReminderScroll><ReminderList
             items={probation}
             emptyText="近期暂无其他试用期满节点"
             onEdit={openEdit}
-          />
+          /></ReminderScroll>
         </section>
 
         <section className="rounded-xl border border-[#d4e3f5] bg-white p-4 min-h-[260px]">
@@ -232,7 +234,7 @@ export function RemindersView() {
             </select>
           </div>
           <div className="h-px bg-[#9AA7B4]/30 mb-3" />
-          <div className="space-y-2.5">
+          <ReminderScroll><div className="space-y-2.5">
             {filteredTitle.map((t) => (
               <div
                 key={t.id}
@@ -264,7 +266,7 @@ export function RemindersView() {
                 </span>
               </div>
             ))}
-          </div>
+          </div></ReminderScroll>
         </section>
       </div>
 

@@ -118,7 +118,7 @@ export function PortraitView() {
         </section>
 
         <section className="rounded-xl border border-[#d4e3f5] bg-white p-4 flex flex-col">
-          <PanelTitle>任职经历时间线</PanelTitle>
+          <PanelTitle>履历时间线</PanelTitle>
           <div className="h-px bg-[#9AA7B4]/30 mb-4" />
           {data?.timeline?.length ? (
             <div className="relative flex-1 pl-2 overflow-auto max-h-[360px]">

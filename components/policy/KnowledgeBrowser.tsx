@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/Button";
+import { userMessage } from "@/lib/user-message";
 
 type Doc = {
   id: string;
@@ -93,7 +94,7 @@ export function KnowledgeBrowser() {
     }
     setBusy("upload");
     setError("");
-    setTip("正在上传到扣子知识库…");
+    setTip("正在上传并同步知识库…");
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -103,7 +104,7 @@ export function KnowledgeBrowser() {
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || "上传失败");
-      setTip(`已上传并同步扣子：${j.data?.title || file.name}`);
+      setTip(`已上传并同步：${j.data?.title || file.name}`);
       await loadList(j.data?.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -118,7 +119,7 @@ export function KnowledgeBrowser() {
     if (!active) return;
     if (
       !window.confirm(
-        `确认删除《${active.title}》？将同时从本地与扣子知识库移除。`
+        `确认删除《${active.title}》？将从政策知识库中移除。`
       )
     ) {
       return;
@@ -147,8 +148,8 @@ export function KnowledgeBrowser() {
         <div>
           <h2 className="text-lg font-bold">政策知识库原文</h2>
           <p className="text-xs text-[#7b8da0] mt-0.5">
-            共 {docs.length} 份 · 仅支持上传 docx，同步到扣子知识库
-            {cozeConfigured ? "（已配置）" : "（未配置 POLICY_DATASET_ID）"}
+            共 {docs.length} 份 · 支持上传 docx 并同步知识库
+            {cozeConfigured ? "" : "（上传服务暂不可用）"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -186,7 +187,7 @@ export function KnowledgeBrowser() {
               : "bg-[#eef6fe] text-[#1a4b7a] border border-[#cfe3f8]"
           }`}
         >
-          {error || tip}
+          {userMessage(error || tip)}
         </div>
       )}
 
@@ -222,7 +223,7 @@ export function KnowledgeBrowser() {
               >
                 <span className="block truncate">{d.title}</span>
                 <span className="mt-1 block text-[11px] font-normal text-[#7b8da0]">
-                  {d.cozeDocumentId ? "已同步扣子" : "仅本地"}
+                  {d.cozeDocumentId ? "已同步" : "已收录"}
                 </span>
               </button>
             ))
@@ -254,9 +255,6 @@ export function KnowledgeBrowser() {
               </div>
               <p className="text-xs text-[#7b8da0] mb-4">
                 {active.sourceFile || "—"}
-                {active.cozeDocumentId
-                  ? ` · 扣子文档 ${active.cozeDocumentId}`
-                  : " · 尚未同步扣子"}
               </p>
               <pre className="whitespace-pre-wrap text-sm leading-7 font-sans">
                 {active.content}

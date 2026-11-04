@@ -1,7 +1,7 @@
 import { looksLikePlaceholderName } from "@/lib/vision-meta";
 
 /** Only this version's cache contains titles read from the actual audit images. */
-export const AUDIT_VISION_SOURCE = "audit-vision-v2";
+export const AUDIT_VISION_SOURCE = "audit-vision-v3";
 
 export function cleanAuditTitle(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;

@@ -23,6 +23,7 @@ function loadModule(file, dependencies = {}, globals = {}) {
 
 const meta = loadModule("../lib/vision-meta.ts").exports;
 const titles = loadModule("../lib/audit-title.ts", { "@/lib/vision-meta": meta }).exports;
+const rules = loadModule("../lib/audit-rules.ts").exports;
 function loadAudit(query, dependencies = {}, globals = {}) {
   return loadModule("../lib/audit-vision.ts", {
     "@/lib/db": { query },
@@ -32,6 +33,7 @@ function loadAudit(query, dependencies = {}, globals = {}) {
     "@/lib/storage": {},
     "@/lib/vision-meta": meta,
     "@/lib/audit-title": titles,
+    "@/lib/audit-rules": rules,
     ...dependencies,
   }, globals);
 }
@@ -52,6 +54,25 @@ test("wrapped Coze answer uses explicit title and never a title mentioned only i
   assert.equal(result.materialTitle, title);
   assert.equal(result.fields.name, "张三");
   assert.equal(audit.parseVisionAnswer(JSON.stringify({ pageText: "参照《干部任免审批表》" })).materialTitle, undefined);
+});
+
+test("formation dates, source date precision and structured evidence survive parsing and page merging", () => {
+  const audit = loadAudit(async () => ({ rows: [] }));
+  const first = audit.parseVisionAnswer(JSON.stringify({
+    materialTitle: "毕业生登记表", formDate: "2022年6月", work: "2022年8月",
+    experienceEvents: [{ kind: "study", start: "2018-09", end: "2022-06", organization: "S大学", position: "班长" }],
+    educationEvidence: [{ type: "graduateRegistration", level: "本科", education: "本科", school: "S大学" }],
+  }));
+  assert.equal(first.formDate, "2022-06");
+  assert.equal(first.fields.work, "2022-08");
+  assert.equal(first.fields._formDate, "2022-06");
+  assert(!first.fields.experience.includes("班长"));
+  const last = audit.parseVisionAnswer(JSON.stringify({ materialTitle: "毕业生登记表", formDate: "2022-07-15",
+    educationEvidence: [{ type: "degreeCertificate", level: "本科", degree: "工学学士学位" }] }));
+  const merged = audit.mergeExtracts([first, last]);
+  assert.equal(merged.formDate, "2022-07-15");
+  assert.equal(merged.fields._formDate, "2022-07-15");
+  assert.equal(JSON.parse(merged.fields._educationEvidence).length, 2);
 });
 
 test("new Coze title replaces a real-looking legacy name without changing archive records", async () => {

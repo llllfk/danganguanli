@@ -89,7 +89,7 @@ export const talentPortraitWang = {
     { date: "2029-07", label: "中级（预测）", pending: true },
   ],
   assessments: [
-    { year: "2026", result: "", note: "年度考核材料未归档" },
+    { year: "2026", result: "", note: "—" },
     { year: "2025", result: "优秀", note: "年度考核" },
     { year: "2024", result: "称职", note: "年度考核" },
   ],

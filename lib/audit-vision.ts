@@ -6,6 +6,7 @@
  */
 import { query } from "@/lib/db";
 import { AUDIT_VISION_SOURCE, cleanAuditTitle } from "@/lib/audit-title";
+import { normalizeAuditDate, cleanEducationEvidence, cleanExperienceEvents, experienceText, jsonArray } from "@/lib/audit-rules";
 import {
   isCozeVisionConfigured,
   uploadCozeFile,
@@ -22,7 +23,6 @@ import {
 import { getObjectBytes } from "@/lib/storage";
 import {
   looksLikePlaceholderName,
-  normalizeOneDate,
   unwrapAssistantJsonPayload,
 } from "@/lib/vision-meta";
 
@@ -54,13 +54,11 @@ export const FIELD_LABELS: Record<string, string> = {
   recognition: "组织认定",
 };
 
-const PRIORITY_NAME_RE =
-  /履历|任免|入党|转正|党员|学历|学位|毕业|志愿书|申请书/;
-
 type VisionExtract = {
   fields: Record<string, string>;
   pageText: string;
   materialTitle?: string;
+  formDate?: string;
   raw: string;
 };
 
@@ -69,12 +67,16 @@ type ImageInput = { bytes: Buffer; fileName: string; pageNo: number };
 function buildPrompt(pageCount: number) {
   return `你是干部人事档案审核助手。以下共 ${pageCount} 张图片，属于同一件材料，已按页序排列。根据图片实际内容读取，不能根据分类号、件号或已有名称猜测题名。
 请通读全部页面，抽取可用于信息比对的具体记载（不要只返回文件名/件号），某页看不清则从其它页补；确实没有则省略该键。只输出一行 JSON：
-{"materialTitle":"材料正文题名","name":"姓名","birth":"出生日期YYYY-MM-DD","work":"参加工作时间YYYY-MM-DD","party":"入党时间YYYY-MM-DD","education":"学历","degree":"学位","experience":"工作经历摘要","recognition":"组织认定摘要","pageText":"各页关键文字摘要合并，400字内"}
+{"materialTitle":"材料正文题名","formDate":"本材料形成日期","assessmentYear":"仅年度考核表填写考核所属年度","name":"姓名","birth":"出生时间","work":"参加工作时间","party":"入党时间","education":"学历","degree":"学位","experienceEvents":[{"kind":"study或work或title","start":"开始/取得时间","end":"结束时间或至今","organization":"学校或单位","position":"仅领导职务","title":"仅取得的职称"}],"educationEvidence":[{"type":"graduationCertificate或degreeCertificate或graduateRegistration或degreeProof","level":"专科/本科/硕士/博士","education":"学历","degree":"学位全称如工学硕士学位","school":"学校","major":"专业"}],"reviewIssues":[{"kind":"alteration或overlap","message":"仅记录图片明确支持的涂改或时间重叠问题"}],"pageText":"各页关键文字摘要合并，400字内"}
 规则：
 - materialTitle：优先读取第一页顶部印刷的材料题名/表名，原样提取；禁止用文件名、流水号
 - 若正文出现「表彰决定」等内容，不能用正文事项替代第一页顶部实际印刷的表名
-- name/birth/work/party/education/degree/experience/recognition：必须是材料内写明的具体值，用于跨材料比对
-- 日期统一 YYYY-MM-DD；禁止编造`;
+- 所有日期必须保留原文精度：只有年份则YYYY，年月则YYYY-MM，年月日则YYYY-MM-DD，严禁补1月/1日
+- formDate：依据本材料的填表、落款、签署、批准日期，通读末页后提取最后落款日期；不能把出生时间、考核所属年度当形成日期；看不到就留空
+- experienceEvents只提取各阶段学习的时间段/学校、工作的时间段/单位/领导职务，以及取得职称的时间/名称。严禁论文、奖惩、工作内容、班级、学生职务、普通岗位、合同和保险信息；没有则[]
+- educationEvidence只从当前图片中的毕业证书、学位证书、毕业生登记表、授予学位证明提取，不可从履历表、自传中生成证据。证件复印件同样有效，专业学位全称原样保留。每张证件分别列出，区分本科/硕士/博士及毕业证/学位证；没有则[]
+- reviewIssues仅记录有原文证据的涂改和学习工作时间交叉等问题，禁止根据空白或印章猜测，没有则[]
+- name/birth/work/party/education/degree必须是材料内写明的具体值。禁止编造`;
 }
 
 function cleanTitle(raw: string | undefined): string | undefined {
@@ -98,10 +100,23 @@ function parseVisionAnswer(answer: string): VisionExtract {
       let v = String(obj[k] || "").trim();
       if (!v) continue;
       if (k === "birth" || k === "work" || k === "party") {
-        v = normalizeOneDate(v) || v;
+        v = normalizeAuditDate(v) || v;
       }
+      if (k === "experience" || k === "recognition") continue;
       fields[k] = v;
     }
+    const formDate = normalizeAuditDate(String(obj.formDate || obj.form_date || ""));
+    if (formDate) fields._formDate = formDate;
+    const assessmentYear = String(obj.assessmentYear || "");
+    if (/^(?:19|20)\d{2}$/.test(assessmentYear)) fields._assessmentYear = assessmentYear;
+    const events = cleanExperienceEvents(obj.experienceEvents);
+    fields._experienceEvents = JSON.stringify(events);
+    if (events.length) fields.experience = experienceText(events);
+    fields._educationEvidence = JSON.stringify(cleanEducationEvidence(obj.educationEvidence));
+    const reviewIssues = Array.isArray(obj.reviewIssues) ? obj.reviewIssues.filter((issue) =>
+      issue && ["alteration", "overlap"].includes(issue.kind) && typeof issue.message === "string"
+    ) : [];
+    fields._reviewIssues = JSON.stringify(reviewIssues);
     const pageText = String(obj.pageText || "").trim();
     const materialTitle = [
       obj.materialTitle, obj.material_title, obj.materialName,
@@ -111,6 +126,7 @@ function parseVisionAnswer(answer: string): VisionExtract {
       fields,
       pageText,
       materialTitle,
+      formDate,
       raw: answer,
     };
   } catch {
@@ -135,11 +151,19 @@ function mergeExtracts(parts: VisionExtract[]): VisionExtract {
     if (p.pageText) texts.push(p.pageText);
     if (p.raw) raws.push(p.raw);
   }
+  for (const key of ["_educationEvidence", "_experienceEvents", "_reviewIssues"]) {
+    fields[key] = JSON.stringify(parts.flatMap((part) => jsonArray(part.fields[key])));
+  }
+  const events = cleanExperienceEvents(jsonArray(fields._experienceEvents));
+  if (events.length) fields.experience = experienceText(events);
+  const latestDate = parts.map((part) => part.formDate || part.fields._formDate).filter(Boolean).at(-1);
+  if (latestDate) fields._formDate = latestDate;
   return {
     fields,
     pageText: texts.join("\n").slice(0, 2000),
     materialTitle,
     raw: raws.join("\n").slice(0, 4000),
+    formDate: parts.map((part) => part.formDate).filter(Boolean).at(-1),
   };
 }
 
@@ -374,28 +398,7 @@ async function listPagesForAudit(personCode: string): Promise<PageRow[]> {
  * 其它件保留首页，控制调用量。
  */
 function filterPages(rows: PageRow[]): PageRow[] {
-  const byPiece = new Map<string, PageRow[]>();
-  for (const row of rows) {
-    const list = byPiece.get(row.material_no) || [];
-    list.push(row);
-    byPiece.set(row.material_no, list);
-  }
-  const out: PageRow[] = [];
-  for (const list of byPiece.values()) {
-    const sorted = [...list].sort((a, b) => a.page_no - b.page_no);
-    const name = sorted[0]?.material_name || "";
-    const needAll =
-      PRIORITY_NAME_RE.test(name) || looksLikePlaceholderName(name);
-    if (needAll) {
-      // 至多 12 页：前 8 + 末 4，兼顾履历/志愿书尾部落款
-      if (sorted.length <= 12) out.push(...sorted);
-      else out.push(...sorted.slice(0, 8), ...sorted.slice(-4));
-    } else {
-      const first = sorted.find((r) => r.page_no === 1) || sorted[0];
-      if (first) out.push(first);
-    }
-  }
-  return out;
+  return groupByPiece(rows).flatMap((pages) => pages);
 }
 
 function groupByPiece(pages: PageRow[]): PageRow[][] {
@@ -511,11 +514,11 @@ async function insertFieldSources(
   const year = (piece.form_date || "").slice(0, 4);
   let n = 0;
   for (const [fieldKey, value] of Object.entries(fields)) {
-    if (!value?.trim()) continue;
+    if (!FIELD_LABELS[fieldKey] || !value?.trim()) continue;
     await query(
       `INSERT INTO audit_field_sources
-        (person_code, field_key, field_label, material_name, form_year, material_no, value, form_date, is_baseline)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false)`,
+        (person_code, field_key, field_label, material_name, form_year, material_no, value, form_date, is_baseline, meta)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,$9::jsonb)`,
       [
         personCode,
         fieldKey,
@@ -525,6 +528,11 @@ async function insertFieldSources(
         piece.material_no,
         value,
         piece.form_date,
+        JSON.stringify({
+          experienceEvents: jsonArray(fields._experienceEvents),
+          educationEvidence: jsonArray(fields._educationEvidence),
+          reviewIssues: jsonArray(fields._reviewIssues),
+        }),
       ]
     );
     n += 1;
@@ -591,6 +599,7 @@ export async function ensureAuditSourcesByVision(
             fields: first.fields,
             pageText: first.textContent,
             materialTitle: title,
+            formDate: first.fields._formDate,
             raw: "",
           };
           cached = true;
@@ -615,11 +624,16 @@ export async function ensureAuditSourcesByVision(
         if (!images.length) throw new Error("no_page_files");
         result = (await extractFieldsWithFallback(images, head.material_name, signal)).result;
         fromVision += images.length;
-        if (!cleanTitle(result.materialTitle) && !Object.keys(result.fields).length) {
+        if (!cleanTitle(result.materialTitle) && !Object.keys(result.fields).some((key) => FIELD_LABELS[key])) {
           throw new Error("vision_returned_no_title_or_fields");
         }
       }
       const title = cleanTitle(result.materialTitle);
+      head.form_date = result.formDate || result.fields._formDate || null;
+      await query(
+        `UPDATE ordered_archive_pieces SET form_date = $1 WHERE person_code = $2 AND formal_no = $3`,
+        [head.form_date, personCode, head.material_no]
+      );
       const resolvedTitle = await resolveSourceTitle(
         personCode, head, title
       );

@@ -102,12 +102,11 @@ export const CATEGORY_SHORT: Record<string, string> = {
 };
 
 export function categoryTagColor(code?: string): string {
-  if (!code) return "bg-[#94a3b8]";
-  if (code.startsWith("09")) {
-    if (code === "0902") return "bg-[#f59e0b]";
-    return "bg-[#3b82f6]";
-  }
-  if (code.startsWith("04")) return "bg-[#22c55e]";
-  if (code === "0500" || code === "0600" || code === "0300") return "bg-[#22c55e]";
-  return "bg-[#22c55e]";
+  const colors: Record<string, string> = {
+    "01": "bg-[#2563eb]", "02": "bg-[#7c3aed]", "03": "bg-[#0891b2]",
+    "04": "bg-[#16a34a]", "05": "bg-[#d97706]", "06": "bg-[#dc2626]",
+    "07": "bg-[#db2777]", "08": "bg-[#92400e]", "09": "bg-[#4f46e5]",
+    "10": "bg-[#475569]",
+  };
+  return colors[(code || "").slice(0, 2)] || "bg-[#94a3b8]";
 }

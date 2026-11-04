@@ -1,5 +1,6 @@
 "use client";
 
+import { userMessage } from "@/lib/user-message";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmModal } from "@/components/ui/ConfirmModal";
@@ -34,10 +35,7 @@ function formatThinking(ms: number) {
 }
 
 function providerLabel(p?: string) {
-  if (p === "coze-bot") return "扣子智能体";
-  if (p === "db-fallback") return "本地库兜底";
-  if (p === "db") return "本地知识库";
-  return "";
+  return p ? "政策知识库" : "";
 }
 
 function BookIcon() {
@@ -656,7 +654,7 @@ export function PolicyAskClient() {
 
         {error ? (
           <div className="mx-5 mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            {error}
+            {userMessage(error)}
           </div>
         ) : null}
 

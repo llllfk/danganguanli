@@ -1,5 +1,6 @@
 "use client";
 
+import { userMessage } from "@/lib/user-message";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { DeletePersonModal } from "@/components/shared/DeletePersonModal";
@@ -191,7 +192,7 @@ export function ArchiveClient() {
       let msg = e instanceof Error ? e.message : "上传失败";
       if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) {
         msg =
-          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP / 分批上传；扣子请确认已开通对象存储（COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME）。";
+          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP 或分批上传。";
       }
       setError(msg);
     } finally {
@@ -486,12 +487,12 @@ export function ArchiveClient() {
           ) : null}
           {tip ? (
             <div className="rounded-lg border border-[#cfe0f5] bg-[#eef6fe] px-3 py-1.5 text-sm text-[#1a4b7a]">
-              {tip}
+              {userMessage(tip)}
             </div>
           ) : null}
           {error ? (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm text-rose-700">
-              {error}
+              {userMessage(error)}
             </div>
           ) : null}
         </div>

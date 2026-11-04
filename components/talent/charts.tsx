@@ -185,8 +185,10 @@ export function EduDonutChart({
 /** 专业结构：柱顶数值 + 柱下竖排类名，避免斜标签交叉 */
 export function MajorBarChart({ data }: { data: MajorItem[] }) {
   if (!data.length) return <EmptyChart />;
-  const max = Math.max(...data.map((d) => d.count), 1);
-  const mid = Math.round(max / 2);
+  const peak = Math.max(...data.map((d) => d.count), 1);
+  const tickStep = peak > 200 ? 50 : 20;
+  const max = Math.ceil((peak + 1) / tickStep) * tickStep;
+  const ticks = Array.from({ length: max / tickStep + 1 }, (_, i) => i * tickStep);
   const n = data.length;
   const maxChars = Math.max(...data.map((d) => d.label.length), 1);
 
@@ -213,7 +215,7 @@ export function MajorBarChart({ data }: { data: MajorItem[] }) {
         role="img"
         aria-label="专业结构"
       >
-        {[max, mid, 0].map((v) => {
+        {ticks.map((v) => {
           const y = yAt(v);
           return (
             <g key={`tick-${v}`}>
@@ -313,11 +315,11 @@ export function MajorBarChart({ data }: { data: MajorItem[] }) {
 }
 
 const TREND_Y: Record<string, number> = {
-  优秀: 18,
-  称职: 48,
-  合格: 78,
-  不合格: 108,
-  待归档: 18,
+  优秀: 38,
+  称职: 68,
+  合格: 98,
+  不合格: 128,
+  待归档: 38,
 };
 
 export function AssessmentTrend({
@@ -325,11 +327,11 @@ export function AssessmentTrend({
 }: {
   points: { year: string; level: keyof typeof TREND_Y | string }[];
 }) {
-  const w = 320;
-  const h = 150;
-  const padX = 48;
+  const w = 360;
+  const h = 178;
+  const padX = 76;
   const padBottom = 22;
-  const step = points.length > 1 ? (w - padX * 2) / (points.length - 1) : 0;
+  const step = points.length > 1 ? (w - padX - 32) / (points.length - 1) : 0;
   const coords = points.map((p, i) => ({
     x: padX + i * step,
     y: TREND_Y[p.level] ?? 50,
@@ -342,11 +344,11 @@ export function AssessmentTrend({
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[168px]" role="img">
       {["优秀", "称职", "合格", "不合格"].map((lab, i) => {
-        const y = [18, 48, 78, 108][i];
+        const y = [38, 68, 98, 128][i];
         return (
           <g key={lab}>
             <line
-              x1={padX}
+              x1={48}
               y1={y}
               x2={w - 12}
               y2={y}
@@ -354,7 +356,7 @@ export function AssessmentTrend({
               strokeWidth="1"
             />
             <text
-              x={padX - 8}
+              x={40}
               y={y + 3}
               textAnchor="end"
               fill="#64748b"

@@ -1,5 +1,6 @@
 "use client";
 
+import { userMessage } from "@/lib/user-message";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
@@ -148,7 +149,7 @@ export function AuditClient() {
       setLoaded(true);
       setReport(null);
       setTip(
-        `已上传人员 ${last.personCode}：${last.pieceCount} 件 / ${last.pageCount} 页（存储：${last.storage === "s3" ? "Coze S3" : "本地"}）${savedBytes > 0 ? `；压缩节省 ${(savedBytes / 1024 / 1024).toFixed(1)} MB` : ""}`
+        `已上传人员 ${last.personCode}：${last.pieceCount} 件 / ${last.pageCount} 页${savedBytes > 0 ? `；压缩节省 ${(savedBytes / 1024 / 1024).toFixed(1)} MB` : ""}`
       );
       // 刷新已入库人员列表
       try {
@@ -161,7 +162,7 @@ export function AuditClient() {
       let msg = e instanceof Error ? e.message : "上传失败";
       if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) {
         msg =
-          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP / 分批上传；扣子请确认已开通对象存储（COZE_BUCKET_ENDPOINT_URL / COZE_BUCKET_NAME）。";
+          "上传请求失败（网络中断、超时或单次体积过大）。请改用较小 ZIP 或分批上传。";
       }
       setError(msg);
       setTip("");
@@ -387,12 +388,12 @@ export function AuditClient() {
           ) : null}
           {tip ? (
             <div className="rounded-lg border border-[#cfe0f5] bg-[#eef6fe] px-3 py-1.5 text-sm text-[#1a4b7a]">
-              {tip}
+              {userMessage(tip)}
             </div>
           ) : null}
           {error ? (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm text-rose-700">
-              {error}
+              {userMessage(error)}
             </div>
           ) : null}
         </div>
@@ -704,6 +705,7 @@ export function AuditClient() {
                   <div className="space-y-2 anim-fade-up">
                     {report.fields.map((f) => {
                       const bad = f.status !== "ok";
+                      const recognition = f.field === "recognition";
                       const multi =
                         bad &&
                         f.sources.length > 1 &&
@@ -725,7 +727,7 @@ export function AuditClient() {
                                 </span>
                                 {multi ? null : f.value || "未检出"}
                               </div>
-                              {multi ? (
+                              {recognition ? null : multi ? (
                                 <ol className="mt-1.5 space-y-1 text-[13px] text-[#334155]">
                                   {f.sources.map((s, i) => (
                                     <li key={i}>
@@ -746,12 +748,12 @@ export function AuditClient() {
                                   来源：未检出
                                 </div>
                               )}
-                              {bad ? (
+                              {bad || f.aiOpinion ? (
                                 <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                                  <span className="inline-flex items-center gap-1 text-[13px] text-rose-600 font-medium">
+                                  {bad && !recognition ? <span className="inline-flex items-center gap-1 text-[13px] text-rose-600 font-medium">
                                     <span aria-hidden>⚠</span>
                                     {f.statusText}
-                                  </span>
+                                  </span> : null}
                                   {f.aiOpinion ? (
                                     <button
                                       type="button"
@@ -764,13 +766,13 @@ export function AuditClient() {
                                 </div>
                               ) : null}
                             </div>
-                            <button
+                            {!recognition ? <button
                               type="button"
                               className="shrink-0 text-[12px] text-[#4a9eff] hover:underline"
                               onClick={() => setSourceField(f)}
                             >
                               [查看全部来源]
-                            </button>
+                            </button> : null}
                           </div>
                         </div>
                       );
@@ -810,9 +812,7 @@ export function AuditClient() {
                           ⚠
                         </span>
                         <span>
-                          {c.message?.startsWith("缺少")
-                            ? c.message
-                            : `缺少${c.message || c.category}`}
+                          {c.message || c.category}
                         </span>
                       </li>
                     ))}
@@ -930,7 +930,7 @@ export function AuditClient() {
               key={i}
               className="rounded-lg border border-[#e4ebf3] px-3 py-2 text-sm break-words"
             >
-              {sourceLabel(s)}：{s.value}
+              {sourceLabel(s)}{s.formDate ? `（形成时间：${s.formDate}）` : ""}：{s.value}
             </div>
           ))}
           {!sourceField?.sources.length ? (
