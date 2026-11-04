@@ -88,7 +88,7 @@ test("a recognized real title is not overwritten by a later conflicting extracti
   assert.equal(calls, 0);
 });
 
-test("verified audit scan title corrects the known bad 0700 demo title", async () => {
+test("Coze title overrides the old and verified fallback titles", async () => {
   const updates = [];
   const audit = loadAudit(async (sql, params) => {
     updates.push({ sql, params });
@@ -101,12 +101,38 @@ test("verified audit scan title corrects the known bad 0700 demo title", async (
     file_path: null,
     file_name: "00001-0700-001-001.jpg",
     page_no: 1,
-  }, "表彰决定");
-  assert.equal(result, "先进个人审批表");
+  }, "年度优秀员工审批表", "第一页标题：年度优秀员工审批表", true);
+  assert.equal(result, "年度优秀员工审批表");
   assert.equal(updates.length, 2);
   for (const update of updates) {
-    assert.equal(update.params[0], "先进个人审批表");
+    assert.equal(update.params[0], "年度优秀员工审批表");
   }
+});
+
+test("verified title remains a fallback when Coze does not return a title", async () => {
+  const audit = loadAudit(async () => ({ rows: [], rowCount: 1 }));
+  const result = await audit.resolveSourceTitle("00001", {
+    material_name: "表彰决定",
+    material_no: "00001-0700-001",
+    form_date: null,
+    file_path: null,
+    file_name: "00001-0700-001-001.jpg",
+    page_no: 1,
+  });
+  assert.equal(result, "先进个人审批表");
+});
+
+test("cached titles do not replace a valid title without a new vision result", async () => {
+  const audit = loadAudit(async () => ({ rows: [], rowCount: 1 }));
+  const result = await audit.resolveSourceTitle("00001", {
+    material_name: "干部履历表",
+    material_no: "00001-0100-001",
+    form_date: null,
+    file_path: null,
+    file_name: "00001-0100-001-001.jpg",
+    page_no: 1,
+  }, "职工履历表", "职工履历表", false);
+  assert.equal(result, "干部履历表");
 });
 
 test("audit list shows one formal piece number rather than every page filename", () => {

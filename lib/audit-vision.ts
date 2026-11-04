@@ -417,7 +417,7 @@ async function maybeUpdatePieceTitle(
   personCode: string,
   piece: PageRow,
   title?: string,
-  replaceKnownWrongTitle = false
+  allowReplace = false
 ) {
   const t = (title || "").trim().replace(/\s+/g, "");
   if (!t || looksLikePlaceholderName(t, piece.material_no)) {
@@ -429,7 +429,7 @@ async function maybeUpdatePieceTitle(
   if (
     cur &&
     !looksLikePlaceholderName(cur, piece.material_no) &&
-    !replaceKnownWrongTitle
+    !allowReplace
   ) {
     return cur;
   }
@@ -673,18 +673,23 @@ async function resolveSourceTitle(
   personCode: string,
   piece: PageRow,
   materialTitle?: string,
-  rawHint?: string
+  rawHint?: string,
+  preferVisionTitle = false
 ): Promise<string> {
   const knownTitle = auditUploadTitleCorrection(piece.material_no);
+  const returnedTitle = cleanTitle(materialTitle);
   const guessed = guessTitleFromRaw(rawHint || "");
-  for (const cand of [knownTitle, materialTitle, guessed]) {
+  const candidates = preferVisionTitle
+    ? [returnedTitle, knownTitle, guessed]
+    : [knownTitle, returnedTitle, guessed];
+  for (const cand of candidates) {
     const t = cleanTitle(cand);
     if (!t) continue;
     const written = await maybeUpdatePieceTitle(
       personCode,
       piece,
       t,
-      !!knownTitle
+      (preferVisionTitle && t === returnedTitle) || t === knownTitle
     );
     if (written && !looksLikePlaceholderName(written, piece.material_no)) {
       return written;
@@ -730,13 +735,15 @@ async function insertFieldSources(
   piece: PageRow,
   fields: Record<string, string>,
   materialTitle?: string,
-  rawHint?: string
+  rawHint?: string,
+  preferVisionTitle = false
 ) {
   const displayName = await resolveSourceTitle(
     personCode,
     piece,
     materialTitle,
-    rawHint
+    rawHint,
+    preferVisionTitle
   );
   const year = (piece.form_date || "").slice(0, 4);
   let n = 0;
@@ -891,7 +898,8 @@ export async function ensureAuditSourcesByVision(
         personCode,
         head,
         result.materialTitle,
-        `${result.pageText || ""}\n${result.raw || ""}`
+        `${result.pageText || ""}\n${result.raw || ""}`,
+        true
       );
 
       // 首页写合并结果；其余页写占位便于缓存命中
@@ -914,7 +922,8 @@ export async function ensureAuditSourcesByVision(
         head,
         result.fields,
         resolvedTitle,
-        `${result.pageText || ""}\n${result.raw || ""}`
+        `${result.pageText || ""}\n${result.raw || ""}`,
+        true
       );
     } catch (e) {
       console.warn("audit vision piece failed", head.material_no, e);
