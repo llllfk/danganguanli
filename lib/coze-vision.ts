@@ -37,7 +37,8 @@ function sleep(ms: number) {
 /** 上传本地字节到扣子，返回 file_id */
 export async function uploadCozeFile(
   bytes: Buffer,
-  fileName = "page.jpg"
+  fileName = "page.jpg",
+  options?: { signal?: AbortSignal }
 ): Promise<string> {
   const form = new FormData();
   const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
@@ -49,8 +50,11 @@ export async function uploadCozeFile(
       Authorization: `Bearer ${token()}`,
     },
     body: form,
+    signal: options?.signal,
   });
-  const json = (await res.json()) as {
+  const json = (await res.json().catch(() => {
+    throw new Error(`扣子文件上传服务返回异常（HTTP ${res.status}），请稍后重试`);
+  })) as {
     code: number;
     msg: string;
     data?: { id: string };

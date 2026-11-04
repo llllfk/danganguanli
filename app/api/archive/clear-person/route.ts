@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { clearPersonData } from "@/lib/repos/clear-person";
-import { query } from "@/lib/db";
+import { clearPersonData, listDeletablePersons } from "@/lib/repos/clear-person";
 
 export const runtime = "nodejs";
 
-/** 清空当前人员全部业务数据（测试用；保留 persons 主档） */
+/** List every person, including master records without uploaded archives. */
+export async function GET() {
+  try {
+    if (!(await getSessionUser())) {
+      return NextResponse.json({ error: "未登录" }, { status: 401 });
+    }
+    return NextResponse.json({ data: await listDeletablePersons() });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "加载人员失败" }, { status: 500 });
+  }
+}
+
+/** Delete the explicitly selected person's master record, related records and uploaded copies. */
 export async function POST(request: NextRequest) {
   try {
     const user = await getSessionUser();
@@ -21,19 +32,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "缺少人员代码" }, { status: 400 });
     }
 
-    const p = await query<{ person_name: string }>(
-      `SELECT person_name FROM persons WHERE person_code = $1`,
-      [personCode]
-    );
-    const personName = p.rows[0]?.person_name || personCode;
-
     const result = await clearPersonData(personCode);
     const total = Object.values(result.deleted).reduce((s, n) => s + n, 0);
 
     return NextResponse.json({
       data: {
         ...result,
-        personName,
         total,
       },
     });

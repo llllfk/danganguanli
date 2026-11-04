@@ -146,7 +146,8 @@ function mergeExtracts(parts: VisionExtract[]): VisionExtract {
 /** 一次对话多图同传；失败抛错供上层分批 */
 async function extractFieldsFromImages(
   images: ImageInput[],
-  materialName: string
+  materialName: string,
+  signal?: AbortSignal
 ): Promise<VisionExtract> {
   const botId = visionBotId();
   if (!botId || !token()) {
@@ -165,7 +166,8 @@ async function extractFieldsFromImages(
   for (const img of images) {
     const fileId = await uploadCozeFile(
       img.bytes,
-      img.fileName || `p${img.pageNo}.jpg`
+      img.fileName || `p${img.pageNo}.jpg`,
+      { signal }
     );
     parts.push({ type: "image", file_id: fileId });
   }
@@ -173,6 +175,7 @@ async function extractFieldsFromImages(
   const content = JSON.stringify(parts);
   const res = await fetch(`${API}/v3/chat`, {
     method: "POST",
+    signal,
     headers: {
       Authorization: `Bearer ${token()}`,
       "Content-Type": "application/json",
@@ -187,7 +190,9 @@ async function extractFieldsFromImages(
       ],
     }),
   });
-  const started = (await res.json()) as {
+  const started = (await res.json().catch(() => {
+    throw new Error(`扣子会话服务返回异常（HTTP ${res.status}），请稍后重试`);
+  })) as {
     code: number;
     msg: string;
     data?: { id: string; conversation_id: string; status: string };
@@ -202,11 +207,14 @@ async function extractFieldsFromImages(
   for (let i = 0; i < 45; i++) {
     if (["completed", "failed", "canceled"].includes(status)) break;
     await new Promise((r) => setTimeout(r, 1200));
+    signal?.throwIfAborted();
     const detail = await fetch(
       `${API}/v3/chat/retrieve?conversation_id=${encodeURIComponent(convId)}&chat_id=${encodeURIComponent(chatId)}`,
-      { headers: { Authorization: `Bearer ${token()}` } }
+      { headers: { Authorization: `Bearer ${token()}` }, signal }
     );
-    const dj = (await detail.json()) as {
+    const dj = (await detail.json().catch(() => {
+      throw new Error(`扣子进度服务返回异常（HTTP ${detail.status}），请稍后重试`);
+    })) as {
       data?: { status: string; last_error?: { msg?: string } };
     };
     status = dj.data?.status || status;
@@ -222,9 +230,11 @@ async function extractFieldsFromImages(
 
   const msgRes = await fetch(
     `${API}/v3/chat/message/list?conversation_id=${encodeURIComponent(convId)}&chat_id=${encodeURIComponent(chatId)}`,
-    { headers: { Authorization: `Bearer ${token()}` } }
+    { headers: { Authorization: `Bearer ${token()}` }, signal }
   );
-  const mj = (await msgRes.json()) as {
+  const mj = (await msgRes.json().catch(() => {
+    throw new Error(`扣子结果服务返回异常（HTTP ${msgRes.status}），请稍后重试`);
+  })) as {
     data?: Array<{ role: string; type: string; content: string }>;
   };
   const answer = (mj.data || [])
@@ -257,17 +267,19 @@ async function extractFieldsFromImages(
  */
 async function extractFieldsWithFallback(
   images: ImageInput[],
-  materialName: string
+  materialName: string,
+  signal?: AbortSignal
 ): Promise<{ result: VisionExtract; mode: "all" | "batch" | "single" }> {
   if (images.length <= 1) {
-    const result = await extractFieldsFromImages(images, materialName);
+    const result = await extractFieldsFromImages(images, materialName, signal);
     return { result, mode: "single" };
   }
 
   try {
-    const result = await extractFieldsFromImages(images, materialName);
+    const result = await extractFieldsFromImages(images, materialName, signal);
     return { result, mode: "all" };
   } catch (e) {
+    signal?.throwIfAborted();
     console.warn(
       "整件多图失败，改分批",
       materialName,
@@ -281,9 +293,10 @@ async function extractFieldsWithFallback(
   for (let i = 0; i < images.length; i += BATCH_SIZE) {
     const batch = images.slice(i, i + BATCH_SIZE);
     try {
-      parts.push(await extractFieldsFromImages(batch, materialName));
+      parts.push(await extractFieldsFromImages(batch, materialName, signal));
       anyBatchOk = true;
     } catch (e) {
+      signal?.throwIfAborted();
       console.warn(
         "分批失败，改逐页",
         materialName,
@@ -292,9 +305,10 @@ async function extractFieldsWithFallback(
       );
       for (const one of batch) {
         try {
-          parts.push(await extractFieldsFromImages([one], materialName));
+          parts.push(await extractFieldsFromImages([one], materialName, signal));
           anyBatchOk = true;
         } catch (e2) {
+          signal?.throwIfAborted();
           console.warn(
             "单页失败",
             materialName,
@@ -333,7 +347,7 @@ async function listPagesForAudit(personCode: string): Promise<PageRow[]> {
      JOIN ordered_archive_pages pg ON pg.piece_id = p.id
      WHERE p.person_code = $1
        AND coalesce(pg.file_path, '') <> ''
-     ORDER BY p.sort_index, pg.page_no`,
+     ORDER BY p.sort_index, p.formal_no, pg.page_no`,
     [personCode]
   );
   if (ordered.rows.length) return filterPages(ordered.rows);
@@ -523,7 +537,12 @@ async function insertFieldSources(
  */
 export async function ensureAuditSourcesByVision(
   personCode: string,
-  opts?: { forceVision?: boolean }
+  opts?: {
+    forceVision?: boolean;
+    cursor?: number;
+    pieceLimit?: number;
+    onProgress?: (progress: { done: number; total: number; materialNo: string }) => void;
+  }
 ): Promise<{
   extracted: number;
   skipped: boolean;
@@ -532,11 +551,13 @@ export async function ensureAuditSourcesByVision(
   fromVision: number;
   pages: number;
   failures: Array<{ materialNo: string; error: string }>;
+  nextCursor: number | null;
+  totalPieces: number;
 }> {
   const pages = await listPagesForAudit(personCode);
   if (!pages.length) {
     return { extracted: 0, skipped: true, reason: "no_page_files", fromCache: 0,
-      fromVision: 0, pages: 0, failures: [] };
+      fromVision: 0, pages: 0, failures: [], nextCursor: null, totalPieces: 0 };
   }
   const visionOk = isCozeVisionConfigured();
   let extracted = 0;
@@ -544,7 +565,11 @@ export async function ensureAuditSourcesByVision(
   let fromVision = 0;
   const failures: Array<{ materialNo: string; error: string }> = [];
 
-  const pieces = groupByPiece(pages);
+  const allPieces = groupByPiece(pages);
+  const cursor = Math.max(0, Math.min(Math.trunc(opts?.cursor || 0), allPieces.length));
+  const pieceLimit = opts?.pieceLimit ? Math.max(1, Math.trunc(opts.pieceLimit)) : allPieces.length;
+  const pieces = allPieces.slice(cursor, cursor + pieceLimit);
+  let completed = 0;
   const processPiece = async (piecePages: PageRow[]) => {
     const head = piecePages[0];
     if (!head) return;
@@ -577,6 +602,7 @@ export async function ensureAuditSourcesByVision(
           return;
         }
         const images: ImageInput[] = [];
+        const signal = AbortSignal.timeout(150_000);
         for (const page of piecePages) {
           if (!page.file_path) continue;
           images.push({
@@ -584,9 +610,10 @@ export async function ensureAuditSourcesByVision(
             fileName: page.file_name || `${page.material_no}-${page.page_no}.jpg`,
             pageNo: page.page_no,
           });
+          signal.throwIfAborted();
         }
         if (!images.length) throw new Error("no_page_files");
-        result = (await extractFieldsWithFallback(images, head.material_name)).result;
+        result = (await extractFieldsWithFallback(images, head.material_name, signal)).result;
         fromVision += images.length;
         if (!cleanTitle(result.materialTitle) && !Object.keys(result.fields).length) {
           throw new Error("vision_returned_no_title_or_fields");
@@ -628,8 +655,13 @@ export async function ensureAuditSourcesByVision(
       }
     } catch (e) {
       failures.push({ materialNo: head.material_no,
-        error: e instanceof Error ? e.message : String(e) });
+        error: e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")
+          ? "该件识别超时，请再次检验重试"
+          : e instanceof Error ? e.message : String(e) });
       console.warn("audit vision piece failed", head.material_no, e);
+    } finally {
+      completed++;
+      opts?.onProgress?.({ done: cursor + completed, total: allPieces.length, materialNo: head.material_no });
     }
   };
   let nextPiece = 0;
@@ -645,5 +677,7 @@ export async function ensureAuditSourcesByVision(
     skipped: !visionOk && !fromCache && !extracted,
     reason: !visionOk && !fromCache && !extracted ? "vision_not_configured" : undefined,
     fromCache, fromVision, pages: pages.length, failures,
+    nextCursor: cursor + pieces.length < allPieces.length ? cursor + pieces.length : null,
+    totalPieces: allPieces.length,
   };
 }

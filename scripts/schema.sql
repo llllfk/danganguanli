@@ -78,6 +78,16 @@ CREATE TABLE IF NOT EXISTS persons (
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Durable retry queue for uploaded files when a person's database records have been deleted.
+CREATE TABLE IF NOT EXISTS person_file_cleanup (
+  id BIGSERIAL PRIMARY KEY,
+  person_code VARCHAR(50) NOT NULL,
+  file_path TEXT NOT NULL,
+  last_error TEXT,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (person_code, file_path)
+);
+
 -- 乱序流水件（智能整编输入）
 CREATE TABLE IF NOT EXISTS archive_pieces (
   id BIGSERIAL PRIMARY KEY,

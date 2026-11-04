@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import {
   GetObjectCommand,
+  DeleteObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -292,6 +293,48 @@ export async function getObjectBytes(filePathOrKey: string): Promise<Buffer> {
     ? filePathOrKey
     : path.join(localUploadRoot(), filePathOrKey.replace(/^\/+/, ""));
   return fs.readFile(abs);
+}
+
+/** Delete only this person's uploaded copy; original requirement/sample sources are references. */
+export async function deletePersonUpload(
+  filePath: string,
+  personCode: string
+): Promise<"deleted" | "reference"> {
+  const parsed = parseS3Path(filePath);
+  if (parsed) {
+    if (![`archive/${personCode}/`, `audit/${personCode}/`].some((prefix) => parsed.key.startsWith(prefix))) {
+      throw new Error("文件路径不属于该人员的上传目录");
+    }
+    const env = storageEnv();
+    if (env.cozeBucketMode) {
+      await resolveCozeBucketConfig();
+      _client = null;
+    }
+    if (parsed.bucket !== getBucket()) throw new Error("当前存储配置与文件所在桶不一致");
+    await getS3Client().send(new DeleteObjectCommand({ Bucket: parsed.bucket, Key: parsed.key }));
+    return "deleted";
+  }
+  const root = path.resolve(localUploadRoot());
+  const target = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
+  const relative = path.relative(root, target);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return "reference";
+  }
+  const segments = relative.split(path.sep);
+  if (!["archive", "audit"].includes(segments[0]) || segments[1] !== personCode || segments.length < 4) {
+    throw new Error("文件路径不属于该人员的上传目录");
+  }
+  try {
+    const [realRoot, realTarget] = await Promise.all([fs.realpath(root), fs.realpath(target)]);
+    const realRelative = path.relative(realRoot, realTarget);
+    if (realRelative === ".." || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
+      throw new Error("上传文件指向上传目录之外");
+    }
+    await fs.unlink(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return "deleted";
 }
 
 export function archiveObjectKey(

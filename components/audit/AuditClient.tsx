@@ -4,10 +4,12 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { RuleEditorModal } from "@/components/shared/RuleEditorModal";
+import { DeletePersonModal } from "@/components/shared/DeletePersonModal";
+import { readAuditResponse } from "@/lib/audit-response";
 import { collectDroppedFiles } from "@/lib/collect-dropped-files";
 import { compressUploadImage } from "@/lib/compress-upload-image";
 import { auditMaterialLabel } from "@/lib/audit-label";
-import type { AuditFieldResult, AuditReport, AuditSource } from "@/types";
+import type { AuditFieldResult, AuditReport, AuditSource, AuditRecord } from "@/types";
 
 type Cat = { code: string; name: string };
 type Mat = {
@@ -36,6 +38,7 @@ export function AuditClient() {
   const [auditRule, setAuditRule] = useState("");
   const [compRule, setCompRule] = useState("");
   const [ruleOpen, setRuleOpen] = useState(false);
+  const [deletePersonOpen, setDeletePersonOpen] = useState(false);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState<Mat | null>(null);
@@ -274,31 +277,56 @@ export function AuditClient() {
       } else {
         setTip(`正在检验人员 ${code}（逐件检查题名，补识别未完成材料）…`);
       }
-      const res = await fetch("/api/audit/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          personCode: code,
-          forceVision: !!opts?.forceVision,
-          rulesOnly: !!opts?.rulesOnly,
-        }),
-      });
-      const json = await res.json();
-      if (json.error) throw new Error(json.error);
-      setReport(json.data.report);
+      type BatchResult = {
+        nextCursor: number | null;
+        report: AuditReport | null;
+        record: AuditRecord | null;
+        visionNote: string;
+        textCount?: number;
+        failures: Array<{ materialNo: string; error: string }>;
+      };
+      let cursor = 0;
+      let result: BatchResult;
+      const failures: BatchResult["failures"] = [];
+      for (;;) {
+        const res = await fetch("/api/audit/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+          body: JSON.stringify({ personCode: code, cursor,
+            forceVision: !!opts?.forceVision, rulesOnly: !!opts?.rulesOnly }),
+        });
+        result = await readAuditResponse<BatchResult>(res, (progress) => {
+          setTip(`正在核验 ${code}：${progress.done}/${progress.total} 件（${progress.materialNo}）`);
+        });
+        failures.push(...(result.failures || []));
+        await loadMaterials(code, { keepReport: true });
+        if (result.nextCursor === null) break;
+        if (!Number.isInteger(result.nextCursor) || result.nextCursor <= cursor) {
+          throw new Error("核验进度异常，请再次开始检验继续");
+        }
+        cursor = result.nextCursor;
+      }
+      if (!result.report) throw new Error("未生成核验报告，请再次开始检验");
+      setReport(result.report);
       setLoaded(true);
       // 核验可能已把视觉题名写回件表，刷新左侧列表
       await loadMaterials(code, { keepReport: true });
-      const rec = json.data.record;
-      const note = json.data.visionNote || "";
-      const texts = json.data.textCount;
+      const rec = result.record;
+      const note = failures.length
+        ? `有 ${failures.length} 件未完成：${failures.map((f) => f.materialNo).join("、")}；再次检验可重试。`
+        : result.visionNote || "";
+      const texts = result.textCount;
       setTip(
         `${note}核验已写入记录：${rec?.summary || ""}（问题 ${rec?.issueCount ?? "-"}${
           texts != null ? `；页文本缓存 ${texts}` : ""
         }）`
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "核验失败");
+      const message = e instanceof Error ? e.message : "核验失败";
+      setError(/Failed to fetch|NetworkError|Load failed|network|Unexpected token|not valid JSON|Unexpected end of JSON/i.test(message)
+        ? "核验连接已中断，已完成的识别会保留，请再次开始检验继续。"
+        : message);
+      setTip("");
     } finally {
       setBusy("");
     }
@@ -382,9 +410,13 @@ export function AuditClient() {
 
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden px-4 pt-3 pb-2 gap-2.5">
             <div className="shrink-0 rounded-xl border border-[#d4e3f5] bg-[#f7fafd] px-3 py-2.5 space-y-2">
-              <label className="block text-[13px] font-semibold text-[#334155]">
-                已入库人员
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="block text-[13px] font-semibold text-[#334155]">已入库人员</label>
+                <button type="button" disabled={!!busy} onClick={() => setDeletePersonOpen(true)}
+                  className="rounded-md border border-rose-200 bg-white px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-50">
+                  删除人员
+                </button>
+              </div>
               <div className="flex gap-2">
                 <select
                   value={personCode}
@@ -915,6 +947,24 @@ export function AuditClient() {
       >
         <p className="text-sm leading-7">{opinionField?.aiOpinion}</p>
       </Modal>
+
+      <DeletePersonModal open={deletePersonOpen} initialCode={personCode}
+        onClose={() => setDeletePersonOpen(false)}
+        onDeleted={(result) => {
+          setPersons((list) => list.filter((person) => person.personCode !== result.personCode));
+          if (result.personCode === personCode) {
+            setPersonCode("");
+            setMaterials([]);
+            setReport(null);
+            setLoaded(false);
+            setPreview(null);
+            setSourceField(null);
+            setOpinionField(null);
+          }
+          setTip(result.filesPending
+            ? `人员信息已删除，${result.filesPending} 个上传文件待清理`
+            : `已删除 ${result.personName}（${result.personCode}）的全部人员信息`);
+        }} />
 
       <RuleEditorModal
         open={ruleOpen}

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
-import { ConfirmModal } from "@/components/ui/ConfirmModal";
+import { DeletePersonModal } from "@/components/shared/DeletePersonModal";
 import { RuleEditorModal } from "@/components/shared/RuleEditorModal";
 import { CATEGORY_SHORT, categoryTagColor } from "@/lib/archive-parse";
 import { collectDroppedFiles } from "@/lib/collect-dropped-files";
@@ -429,36 +429,6 @@ export function ArchiveClient() {
     }
   }
 
-  async function onClearPerson() {
-    if (!personCode) return;
-    setBusy("clear");
-    setError("");
-    try {
-      const res = await fetch("/api/archive/clear-person", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personCode }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || json.error) {
-        throw new Error(json.error || `清空失败（HTTP ${res.status}）`);
-      }
-      setPieces([]);
-      setSorted(null);
-      setClassifyProgress(null);
-      setClearOpen(false);
-      const name = json.data?.personName || personCode;
-      const total = json.data?.total ?? 0;
-      setTip(
-        `已清空 ${name}（${personCode}）业务数据 ${total} 条；可重新上传测试（人员主档保留）`
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "清空失败");
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function onExport() {
     if (!sorted?.length) {
       setError("请先完成智能分类与智能排序后再导出目录");
@@ -633,7 +603,7 @@ export function ArchiveClient() {
               <div className="min-w-0 flex-1">
                 <div className="text-[12px] text-[#7b8da0]">当前人员</div>
                 <div className="text-[14px] font-semibold text-[#1f2937] truncate">
-                  {personCode}
+                  {personCode || "未选择人员"}
                   {pieces.length > 0 ? (
                     <span className="ml-1.5 font-normal text-[#7b8da0]">
                       · {pieces.length} 件 / {pageTotal} 页
@@ -643,12 +613,12 @@ export function ArchiveClient() {
               </div>
               <button
                 type="button"
-                disabled={!!busy || !personCode}
-                title="清空该人员整编/审核等相关数据，便于反复测试"
+                disabled={!!busy}
+                title="选择人员并删除其全部档案信息"
                 onClick={() => setClearOpen(true)}
                 className="shrink-0 h-9 px-3 rounded-lg border border-rose-200 bg-white text-[12px] font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
               >
-                {busy === "clear" ? "清空中…" : "清空全部"}
+                删除人员
               </button>
             </div>
 
@@ -1062,17 +1032,22 @@ export function ArchiveClient() {
         }}
       />
 
-      <ConfirmModal
+      <DeletePersonModal
         open={clearOpen}
-        title="清空当前人员数据"
-        danger
-        busy={busy === "clear"}
-        confirmText="确认清空"
-        message={`将删除人员 ${personCode} 的整编件、有序件、审核出处/记录、页文本缓存等业务数据（保留人员主档）。对象存储中的历史文件不会删除。确认后可重新上传测试。`}
-        onClose={() => {
-          if (busy !== "clear") setClearOpen(false);
+        initialCode={personCode}
+        onClose={() => setClearOpen(false)}
+        onDeleted={(result) => {
+          if (result.personCode === personCode) {
+            setPersonCode("");
+            setPieces([]);
+            setSorted(null);
+            setClassifyProgress(null);
+            setPreview(null);
+          }
+          setTip(result.filesPending
+            ? `人员信息已删除，${result.filesPending} 个上传文件待清理`
+            : `已删除 ${result.personName}（${result.personCode}）的全部人员信息`);
         }}
-        onConfirm={onClearPerson}
       />
     </div>
   );

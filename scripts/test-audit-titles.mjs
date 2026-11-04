@@ -6,7 +6,7 @@ import ts from "typescript";
 
 function loadModule(file, dependencies = {}, globals = {}) {
   const context = {
-    exports: {}, process, console, Buffer, ...globals,
+    exports: {}, process, console, Buffer, AbortSignal, ...globals,
     require(name) {
       if (!(name in dependencies)) throw new Error(`Unexpected import: ${name}`);
       return dependencies[name];
@@ -141,6 +141,27 @@ test("all categories read their own Coze titles despite existing sources; title-
   assert.equal(second.fromCache, categoryDocs.length);
   assert.equal(second.fromVision, 0);
   assert.equal(second.failures.length, 0);
+});
+
+test("batch cursors cover every material once and retain progress across requests", async () => {
+  const harness = pipelineHarness(categoryDocs);
+  let cursor = 0;
+  const completed = [];
+  let requests = 0;
+  do {
+    const result = await harness.audit.ensureAuditSourcesByVision("00001", {
+      cursor, pieceLimit: 2, onProgress: (progress) => completed.push(progress),
+    });
+    requests++;
+    assert(result.fromVision <= 2);
+    if (result.nextCursor === null) break;
+    assert(result.nextCursor > cursor);
+    cursor = result.nextCursor;
+  } while (requests < 10);
+  assert.equal(requests, 4);
+  assert.equal(new Set(completed.map((p) => p.materialNo)).size, categoryDocs.length);
+  assert.deepEqual(completed.map((p) => p.done), [1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(harness.cache.size, categoryDocs.length);
 });
 
 test("legacy or incomplete caches retry, and a failed piece preserves its old sources", async () => {
