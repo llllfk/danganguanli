@@ -171,9 +171,17 @@ function selectEducation(docs: AuditDocument[], field: "education" | "degree"): 
   if (!selected) return { field, label: LABELS[field], value: "未检出", status: "missing", statusText: "未检出", sources: [], aiOpinion: "请结合材料。" };
   const e = selected.evidence;
   const value = field === "education"
-    ? `${e.education || (educationRank(e.level) >= 3 ? "研究生" : e.level)}${e.school ? `-${e.school}` : ""}`
+    ? `${normalizeEducationLabel(e.education || e.level)}${e.school ? `-${e.school}` : ""}`
     : `${e.degree || `${e.level.replace(/研究生/g, "")}学位`}${e.major ? `-${e.major}` : ""}`;
   return { field, label: LABELS[field], value, status: "ok", statusText: "已提取", sources: [sourceFor(selected.doc, value)] };
+}
+
+function normalizeEducationLabel(value: string) {
+  if (/博士/.test(value)) return "博士研究生";
+  if (/硕士|研究生/.test(value)) return "研究生";
+  if (/本科|学士/.test(value)) return "本科";
+  if (/大专|专科/.test(value)) return "专科";
+  return value;
 }
 
 export function buildAuditFields(docs: AuditDocument[]): AuditFieldResult[] {
@@ -192,7 +200,7 @@ export function buildAuditFields(docs: AuditDocument[]): AuditFieldResult[] {
       dateBounds(a.formDate!)[0].localeCompare(dateBounds(b.formDate!)[0]));
     const baseline = field === "birth" ? dated[0] || matching[0] : matching[0];
     const earliestIsCertain = dated.length === matching.length && dated.slice(1).every((doc) =>
-      dateBounds(baseline.formDate!)[1] <= dateBounds(doc.formDate!)[0]);
+      dateBounds(baseline.formDate!)[1] < dateBounds(doc.formDate!)[0]);
     const values = sources.map((s) => s.value);
     const consistent = ["birth", "work", "party"].includes(field) ? auditDatesCompatible(values)
       : field === "experience" ? experiencesCompatible(matching.map((doc) => cleanExperienceEvents(jsonArray(doc.fields._experienceEvents))))
@@ -221,8 +229,7 @@ function missingMessage(description: string, pattern: string) {
 export function buildCompleteness(docs: AuditDocument[], requirements: CompletenessRequirement[], now = new Date()): CompletenessIssue[] {
   const issues: CompletenessIssue[] = [];
   const entries = docs.flatMap((doc) => evidenceFor(doc).map((evidence) => ({ doc, evidence })));
-  const inferredRank = Math.max(0, ...entries.map(({ evidence }) => educationRank(evidence.level)),
-    ...docs.map((doc) => educationRank(`${doc.fields.education || ""} ${doc.fields.degree || ""} ${doc.title}`)));
+  const inferredRank = Math.max(0, ...entries.map(({ evidence }) => educationRank(evidence.level)));
   const levels = ["本科", "硕士", "博士"].filter((_, i) => inferredRank >= i + 2);
   for (const level of levels) for (const type of ["graduationCertificate", "degreeCertificate"] as const) {
     if (!entries.some(({ evidence: e }) => e.type === type && educationRank(e.level) === educationRank(level))) {

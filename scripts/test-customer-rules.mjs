@@ -13,6 +13,7 @@ function load(file, dependencies = {}) {
   return context.exports;
 }
 const rules = load("../lib/audit-rules.ts");
+const titleRules = load("../lib/audit-title.ts", { "@/lib/vision-meta": load("../lib/vision-meta.ts") });
 const now = new Date("2026-11-04T04:00:00Z");
 const doc = (title, fields, formDate, category = "0100", ref = title) => ({ title, fields, formDate, category, ref });
 const field = (docs, key) => rules.buildAuditFields(docs).find((item) => item.field === key);
@@ -24,6 +25,13 @@ test("dates preserve year/month/day precision and reject invalid calendar dates"
     ["2022.8.5", "2022-08-05"], ["2024-02-29", "2024-02-29"]]) assert.equal(rules.normalizeAuditDate(input), output);
   assert.equal(rules.normalizeAuditDate("2023-02-29"), undefined);
   assert.equal(rules.normalizeAuditDate("2022-13"), undefined);
+});
+
+test("unreadable or placeholder scan titles are rejected, but actual form titles survive", () => {
+  for (const value of ["未识别题名", "无法判断", "无法读取", "题名不详", "无标题"]) {
+    assert.equal(titleRules.cleanAuditTitle(value), undefined);
+  }
+  assert.equal(titleRules.cleanAuditTitle("劳动合同书"), "劳动合同书");
 });
 
 test("compare only shared date precision, while conflicting fully specified days still conflict", () => {
@@ -105,9 +113,16 @@ test("highest education/degree is selected from authoritative documents and neve
   assert.equal(education.sources[0].materialName, "硕士毕业生登记表");
 });
 
+test("education display uses concise education level with school and degree keeps its full name", () => {
+  const docs = [doc("硕士毕业生登记表", evidence({ ...master, education: "硕士研究生" }))];
+  assert.equal(field(docs, "education").value, "研究生-S大学");
+  assert.equal(field(docs, "degree").value, "工学硕士学位-水利水电工程");
+});
+
 test("unsubstantiated personal-form education claims do not become authoritative education evidence", () => {
   assert.equal(field([eduDocs[2]], "education").value, "未检出");
   assert.equal(field([doc("硕士毕业生登记表", evidence({ ...master, degree: "" }))], "degree").value, "未检出");
+  assert.equal(rules.buildCompleteness([doc("干部履历表", { education: "博士研究生", degree: "博士学位" })], [], now).some((issue) => /毕业证书|学位证书/.test(issue.message)), false);
 });
 
 test("organization recognition is determined exclusively by the category-five special review form", () => {
