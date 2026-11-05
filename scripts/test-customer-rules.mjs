@@ -181,9 +181,87 @@ test("obsolete education requirements are ignored, missing statements are clean,
 });
 
 test("learning/work chronology overlap remains a review item", () => {
-  const docs = [doc("毕业生登记表", events([{ kind: "study", start: "2019-09", end: "2022-06", organization: "S大学" }])),
-    doc("履历表", events([{ kind: "work", start: "2021-01", end: "至今", organization: "E公司" }]))];
+  const docs = [doc("毕业生登记表", events([{ kind: "study", start: "2019-09", end: "2022-06", organization: "S大学" }]), "2022-07"),
+    doc("履历表", events([{ kind: "work", start: "2021-01", end: "至今", organization: "E公司" }]), "2026-01")];
   assert(rules.buildCompleteness(docs, [], now).some((issue) => issue.message.includes("学习与工作经历时间重叠")));
+});
+
+const overlapMessages = (docs) => rules.buildCompleteness(docs, [], now)
+  .filter((issue) => issue.message.includes("学习与工作经历时间重叠"));
+
+test("a historical student's 至今 stops at the source date and does not overlap later employment", () => {
+  const docs = [
+    doc("入党志愿书", events([{ kind: "study", start: "2015-09-10", end: "至今", organization: "A大学水利工程学院" }]), "2018-06-20"),
+    doc("入党申请书", events([{ kind: "study", start: "2015", organization: "A大学水利工程学院" }]), "2016-03-10"),
+    doc("毕业证书", events([{ kind: "study", start: "2015-09-10", end: "2019-06-30", organization: "A大学" }]), "2019-06-30"),
+    doc("干部履历表", events([{ kind: "work", start: "2022-08-09", end: "至今", organization: "E公司技术部" }]), "2022-08-09"),
+    doc("职称评定表", events([
+      { kind: "work", start: "2022-08-09", end: "2025-12-15", organization: "E公司技术部" },
+      { kind: "work", start: "2025-12-15", end: "至今", organization: "E公司技术部" },
+    ]), "2025-12-15"),
+    doc("薪酬审批表", events([{ kind: "work", start: "2022-08-09", end: "2027-08-08", organization: "E公司" }]), "2022-08-10"),
+    doc("就业人员登记表", events([{ kind: "work", start: "2022-09-08", end: "至今", organization: "E公司" }]), "2022-09-15"),
+  ];
+  const before = JSON.stringify(docs);
+  assert.equal(overlapMessages(docs).length, 0);
+  assert.equal(JSON.stringify(docs), before, "source statements must remain unchanged");
+});
+
+test("omitted ends and undated 至今 statements do not establish an overlap", () => {
+  const work = doc("工作记录", events([{ kind: "work", start: "2022-08", end: "2024-06", organization: "E公司" }]), "2024-07");
+  for (const study of [
+    doc("学生登记表", events([{ kind: "study", start: "2015-09", organization: "A大学" }]), "2023-01"),
+    doc("入党志愿书", events([{ kind: "study", start: "2015-09", end: "至今", organization: "A大学" }])),
+  ]) assert.equal(overlapMessages([study, work]).length, 0);
+  const study = doc("学籍记录", events([{ kind: "study", start: "2015-09", end: "2019-06", organization: "A大学" }]), "2019-07");
+  const unknownWorkEnd = doc("工作记录", events([{ kind: "work", start: "2014", organization: "E公司" }]), "2022-01");
+  assert.equal(overlapMessages([study, unknownWorkEnd]).length, 0);
+});
+
+test("uncertain year/month boundaries and shared transition days do not create an overlap", () => {
+  const work = doc("工作记录", events([{ kind: "work", start: "2022-08", end: "2024-06", organization: "E公司" }]), "2024-07");
+  assert.equal(overlapMessages([doc("学籍记录", events([
+    { kind: "study", start: "2019-09", end: "2022", organization: "S大学" },
+  ]), "2023-01"), work]).length, 0);
+  assert.equal(overlapMessages([
+    doc("毕业证", events([{ kind: "study", start: "2019-09", end: "2022-06-30", organization: "S大学" }]), "2022-07"),
+    doc("履历表", events([{ kind: "work", start: "2022-06-30", end: "2024-06", organization: "E公司" }]), "2024-07"),
+  ]).length, 0);
+});
+
+test("confirmed overlap has finite dates and references its actual source materials once", () => {
+  const docs = [
+    doc("学籍记录", events([{ kind: "study", start: "2019-09", end: "至今", organization: "S大学" }]), "2023-05-20", "0401", "20229-0401-001"),
+    doc("学籍补充", events([{ kind: "study", start: "2019-09", end: "至今", organization: "S大学水利学院" }]), "2023-05-20", "0401", "20229-0401-002"),
+    doc("工作记录", events([{ kind: "work", start: "2021-01", end: "至今", organization: "E公司技术部" }]), "2023-06-30", "0100", "20229-0100-001"),
+    doc("工作补充", events([{ kind: "work", start: "2021-01", end: "至今", organization: "E公司" }]), "2023-06-30", "0100", "20229-0100-002"),
+  ];
+  const warnings = overlapMessages(docs);
+  assert.equal(warnings.length, 1);
+  assert(warnings[0].message.includes("2021-01至2023-05-20"));
+  assert(warnings[0].message.includes("《学籍记录》[20229-0401-001]"));
+  assert(warnings[0].message.includes("《工作记录》[20229-0100-001]"));
+  assert(!warnings[0].message.includes("9999"));
+});
+
+test("a historical ongoing period and a later completed period are compatible", () => {
+  const old = { kind: "study", start: "2015-09", end: "至今", organization: "A大学" };
+  const completed = { ...old, end: "2019-06" };
+  assert.equal(rules.experiencesCompatible([[old], [completed]], ["2018-06", "2019-07"], now), true);
+  const employment = { kind: "work", start: "2022-08", end: "2024-06", organization: "E公司" };
+  const laterEmployment = { ...employment, start: "2023-08", organization: "F公司" };
+  assert.equal(rules.experiencesCompatible([[employment], [laterEmployment]], ["2024-07", "2024-07"], now), false);
+});
+
+test("future or invalid intervals cannot invent work/study after the present", () => {
+  assert.equal(overlapMessages([
+    doc("学习安排", events([{ kind: "study", start: "2027-01", end: "至今", organization: "A大学" }]), "2028-01"),
+    doc("工作安排", events([{ kind: "work", start: "2027-01", end: "2029-01", organization: "E公司" }]), "2028-01"),
+  ]).length, 0);
+  assert.equal(overlapMessages([
+    doc("学籍记录", events([{ kind: "study", start: "2022-01", end: "2020-06", organization: "A大学" }]), "2022-01"),
+    doc("工作记录", events([{ kind: "work", start: "2021-01", end: "2024-01", organization: "E公司" }]), "2024-01"),
+  ]).length, 0);
 });
 
 test("classification colors are unique by major class and shared by its subclasses", () => {

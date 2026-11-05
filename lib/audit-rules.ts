@@ -92,7 +92,6 @@ export function experienceText(events: ExperienceEvent[]) {
 }
 
 function dateBounds(value: string): [string, string] {
-  if (value === "至今") return ["9999-12-31", "9999-12-31"];
   const date = normalizeAuditDate(value) || value;
   if (date.length === 4) return [`${date}-01-01`, `${date}-12-31`];
   if (date.length === 7) {
@@ -103,8 +102,58 @@ function dateBounds(value: string): [string, string] {
 }
 function normalized(value?: string) { return (value || "").replace(/[\s，。；、（）()《》-]/g, "").toLowerCase(); }
 
+type ExperiencePeriod = {
+  start: string;
+  startLabel: string;
+  end: string;
+  endLabel: string;
+};
+
+/** Use only the period supported by the source as of its formation date. */
+function experiencePeriod(event: ExperienceEvent, formDate: string | undefined, now: Date): ExperiencePeriod | undefined {
+  const start = normalizeAuditDate(event.start);
+  const asOf = normalizeAuditDate(formDate);
+  // An omitted end is unknown; a historical "至今" does not extend to the present.
+  const end = event.end === "至今" ? asOf : normalizeAuditDate(event.end);
+  if (!start || !end) return undefined;
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const limits = [end, ...(asOf ? [asOf] : []), today]
+    .map((label) => ({ label, earliest: dateBounds(label)[0] }))
+    .sort((a, b) => a.earliest.localeCompare(b.earliest));
+  // Latest possible start / earliest supported end avoids inventing overlap from a coarse date.
+  const startBound = dateBounds(start)[1];
+  if (startBound >= limits[0].earliest) return undefined;
+  return { start: startBound, startLabel: start, end: limits[0].earliest, endLabel: limits[0].label };
+}
+
+function confirmedOverlap(a: ExperiencePeriod | undefined, b: ExperiencePeriod | undefined) {
+  if (!a || !b) return undefined;
+  const start = a.start > b.start ? a : b;
+  const end = a.end < b.end ? a : b;
+  if (start.start >= end.end) return undefined;
+  return { start: start.startLabel, end: end.endLabel };
+}
+
+function completedEnd(event: ExperienceEvent, formDate?: string) {
+  const end = normalizeAuditDate(event.end);
+  const asOf = normalizeAuditDate(formDate);
+  // A contract expiry or expected graduation beyond the source date is not a completed event.
+  return end && (!asOf || dateBounds(end)[1] <= dateBounds(asOf)[0]) ? end : undefined;
+}
+
+function sameOrganization(a?: string, b?: string) {
+  const left = normalized(a), right = normalized(b);
+  return !!left && !!right && (left === right || left.includes(right) || right.includes(left));
+}
+
+function organizationKey(value?: string) {
+  // School faculties and company departments should not generate duplicate warnings.
+  const name = normalized(value);
+  return name.match(/^.*?(?:大学|公司|集团)/)?.[0] || name;
+}
+
 /** Different descriptions are compatible unless they disagree about the same event/period. */
-export function experiencesCompatible(groups: ExperienceEvent[][]) {
+export function experiencesCompatible(groups: ExperienceEvent[][], formDates: (string | undefined)[] = [], now = new Date()) {
   for (let i = 0; i < groups.length; i++) for (let j = i + 1; j < groups.length; j++) {
     for (const a of groups[i]) for (const b of groups[j]) {
       if (a.kind !== b.kind) continue;
@@ -112,17 +161,14 @@ export function experiencesCompatible(groups: ExperienceEvent[][]) {
         if (normalized(a.title) === normalized(b.title) && !auditDatesCompatible([a.start, b.start])) return false;
         continue;
       }
-      const sameOrg = normalized(a.organization) === normalized(b.organization) ||
-        normalized(a.organization).includes(normalized(b.organization)) || normalized(b.organization).includes(normalized(a.organization));
+      const sameOrg = sameOrganization(a.organization, b.organization);
       const sameStart = auditDatesCompatible([a.start, b.start]);
       if (sameOrg) {
-        if (sameStart && a.end && b.end && !auditDatesCompatible([a.end, b.end])) return false;
-        if (!sameStart && a.end && b.end && auditDatesCompatible([a.end, b.end])) return false;
+        const aEnd = completedEnd(a, formDates[i]), bEnd = completedEnd(b, formDates[j]);
+        if (sameStart && aEnd && bEnd && !auditDatesCompatible([aEnd, bEnd])) return false;
+        if (!sameStart && aEnd && bEnd && auditDatesCompatible([aEnd, bEnd])) return false;
       } else {
-        const start = [dateBounds(a.start)[0], dateBounds(b.start)[0]].sort().at(-1)!;
-        const end = [dateBounds(a.end || a.start)[1], dateBounds(b.end || b.start)[1]].sort()[0];
-        // A shared transition month is a boundary, not evidence of conflicting employers.
-        if (sameStart || (start < end && start.slice(0, 7) !== end.slice(0, 7))) return false;
+        if (confirmedOverlap(experiencePeriod(a, formDates[i], now), experiencePeriod(b, formDates[j], now))) return false;
       }
     }
   }
@@ -184,7 +230,7 @@ function normalizeEducationLabel(value: string) {
   return value;
 }
 
-export function buildAuditFields(docs: AuditDocument[]): AuditFieldResult[] {
+export function buildAuditFields(docs: AuditDocument[], now = new Date()): AuditFieldResult[] {
   return Object.keys(LABELS).map((field) => {
     if (field === "education" || field === "degree") return selectEducation(docs, field);
     if (field === "recognition") {
@@ -203,7 +249,7 @@ export function buildAuditFields(docs: AuditDocument[]): AuditFieldResult[] {
       dateBounds(baseline.formDate!)[1] < dateBounds(doc.formDate!)[0]);
     const values = sources.map((s) => s.value);
     const consistent = ["birth", "work", "party"].includes(field) ? auditDatesCompatible(values)
-      : field === "experience" ? experiencesCompatible(matching.map((doc) => cleanExperienceEvents(jsonArray(doc.fields._experienceEvents))))
+      : field === "experience" ? experiencesCompatible(matching.map((doc) => cleanExperienceEvents(jsonArray(doc.fields._experienceEvents))), matching.map((doc) => doc.formDate), now)
       : new Set(values.map(normalized)).size === 1;
     let aiOpinion: string | undefined;
     if (!consistent) {
@@ -264,13 +310,18 @@ export function buildCompleteness(docs: AuditDocument[], requirements: Completen
   for (const doc of docs) for (const issue of jsonArray<{ kind: string; message: string }>(doc.fields._reviewIssues)) {
     if (["alteration", "overlap"].includes(issue.kind) && issue.message) issues.push({ category: "材料核查", message: `请核查《${doc.title}》：${issue.message}` });
   }
-  const chronology = docs.flatMap((doc) => cleanExperienceEvents(jsonArray(doc.fields._experienceEvents)));
-  for (const study of chronology.filter((event) => event.kind === "study" && event.end)) {
-    for (const work of chronology.filter((event) => event.kind === "work")) {
-      const start = [dateBounds(study.start)[0], dateBounds(work.start)[0]].sort().at(-1)!;
-      const end = [dateBounds(study.end!)[1], dateBounds(work.end || "至今")[1]].sort()[0];
-      if (start < end && start.slice(0, 7) !== end.slice(0, 7)) issues.push({
-        category: "材料核查", message: `请结合材料，核查学习与工作经历时间重叠：${study.organization}与${work.organization}（${start.slice(0, 7)}至${end.slice(0, 7)}）`,
+  const chronology = docs.flatMap((doc) => cleanExperienceEvents(jsonArray(doc.fields._experienceEvents))
+    .map((event) => ({ event, doc, period: experiencePeriod(event, doc.formDate, now) })));
+  const reported = new Set<string>();
+  for (const study of chronology.filter(({ event }) => event.kind === "study")) {
+    for (const work of chronology.filter(({ event }) => event.kind === "work")) {
+      const overlap = confirmedOverlap(study.period, work.period);
+      const key = JSON.stringify([organizationKey(study.event.organization), organizationKey(work.event.organization)]);
+      if (!overlap || reported.has(key)) continue;
+      reported.add(key);
+      issues.push({
+        category: "材料核查",
+        message: `请结合材料，核查学习与工作经历时间重叠：${study.event.organization}与${work.event.organization}（${overlap.start}至${overlap.end}）；来源：《${study.doc.title}》[${study.doc.ref}]、《${work.doc.title}》[${work.doc.ref}]`,
       });
     }
   }
@@ -279,5 +330,5 @@ export function buildCompleteness(docs: AuditDocument[], requirements: Completen
 }
 
 export function buildAuditReport(personCode: string, personName: string, docs: AuditDocument[], requirements: CompletenessRequirement[], now = new Date()): AuditReport {
-  return { personCode, personName, fields: buildAuditFields(docs), completeness: buildCompleteness(docs, requirements, now), createdAt: now.toISOString() };
+  return { personCode, personName, fields: buildAuditFields(docs, now), completeness: buildCompleteness(docs, requirements, now), createdAt: now.toISOString() };
 }
